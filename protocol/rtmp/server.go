@@ -14,6 +14,9 @@ type Handler interface {
 	ServeRTMP(net.Conn)
 }
 
+//TODO
+//这边的结构有点仿造net/http中的Server结构
+//所以很多成员具体的用法还带分析
 type Server struct {
 	Addr         string
 	Handler      Handler
@@ -99,8 +102,14 @@ func (s *Server) getDoneChanLocked() chan struct{} {
 
 func (srv *Server) newConn(netConn net.Conn) *conn {
 	c := &conn{
-		server:  srv,
 		netConn: netConn,
+		server:  srv,
+
+		chunkSize:           128,
+		remoteChunkSize:     128,
+		windowAckSize:       2500000,
+		remoteWindowAckSize: 2500000,
+		chunks:              make(map[uint32]*ChunkStream),
 	}
 
 	return c
