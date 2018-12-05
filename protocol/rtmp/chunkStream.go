@@ -6,8 +6,29 @@ import (
 	"io"
 	"log"
 
+	//"github.com/chinasarft/golive/av"
 	"github.com/chinasarft/golive/utils/byteio"
 )
+
+type ChunkBasicHeader struct {
+	format        uint8
+	chunkStreamID uint32
+}
+
+type ChunkMessageHeader struct {
+	timestamp        uint32
+	messaageLength   uint32
+	messageTypeID    uint8
+	isStreamIDExists bool
+	timestampExted   bool
+	messageStreamID  uint32
+}
+
+type Chunk struct {
+	*ChunkBasicHeader
+	*ChunkMessageHeader
+	data []byte
+}
 
 /*
 +--------------+----------------+--------------------+--------------+
@@ -18,38 +39,75 @@ import (
                             Chunk Format
 */
 
+//Different message streams multiplexed onto the same chunk stream
+//      are demultiplexed based on their message stream IDs
+//一个chunkstream上可以跑多个messagestream。 但是目前抓包没有看到过这样做的
+//但是以message为中心应该可以的
 type ChunkStream struct {
-	Format    uint32
-	CSID      uint32
-	Timestamp uint32
-	Length    uint32
-	TypeID    uint32
-	StreamID  uint32
-	timeDelta uint32
-	exted     bool
-	index     uint32
-	remain    uint32
-	got       bool
-	tmpFromat uint32
-	Data      []byte
+	LastMessageStreamID uint32
+	LastChunkFormat     uint8
+	ChunkStreamID       uint32
 }
 
-func (cs *ChunkStream) IsGetFullMessage() bool {
-	return cs.got
+type ChunkStreamSet struct {
+	streams      map[uint32]*ChunkStream
+	statusGetter MessageStreamStatusGetter
+	chunkSize    uint32
 }
 
-func (cs *ChunkStream) allocDataBuffer() {
-	cs.got = false
-	cs.index = 0
-	cs.remain = cs.Length
-	if cs.Data == nil {
-		cs.Data = make([]byte, cs.Length)
-	} else {
-		if uint32(len(cs.Data)) < cs.Length {
-			cs.Data = make([]byte, cs.Length)
-		}
+func NewChunkStreamSet(getStatus MessageStreamStatusGetter) *ChunkStreamSet {
+	return &ChunkStreamSet{
+		streams:      make(map[uint32]*ChunkStream),
+		statusGetter: getStatus,
+		chunkSize:    128,
 	}
 }
+
+func (s *ChunkStreamSet) SetChunkSize(size uint32) {
+	s.chunkSize = size
+}
+
+func (s *ChunkStreamSet) ReadChunk(r io.Reader) (*Chunk, error) {
+
+	chunkBasicHdr, err := getChunkBasicHeader(r)
+	if err != nil {
+		return nil, err
+	}
+
+	cs, ok := s.streams[chunkBasicHdr.chunkStreamID]
+	if !ok {
+		cs = &ChunkStream{}
+		s.streams[chunkBasicHdr.chunkStreamID] = cs
+		cs.ChunkStreamID = chunkBasicHdr.chunkStreamID
+	}
+	cs.LastChunkFormat = chunkBasicHdr.format
+
+	chunkMessageHdr, err := readChunkMessageHeader(r, chunkBasicHdr.format)
+	if err != nil {
+		return nil, err
+	}
+
+	remain := chunkMessageHdr.messaageLength
+	if !chunkMessageHdr.isStreamIDExists {
+		stat, ok := s.statusGetter.GetMessageStreamStatus(cs.LastMessageStreamID)
+		if !ok {
+			return nil, fmt.Errorf("unknown status")
+		}
+		remain = stat.remain
+	}
+	if remain > s.chunkSize {
+		remain = s.chunkSize
+	}
+
+	data, err := readChunkData(r, remain, s.chunkSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Chunk{chunkBasicHdr, chunkMessageHdr, data}, nil
+}
+
+//------------------
 
 /*
  0 1 2 3 4 5 6 7
@@ -70,7 +128,7 @@ func (cs *ChunkStream) allocDataBuffer() {
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
              Chunk basic header 3
 */
-func getChunkBasicHeader(r io.Reader) (fmt, csid uint32, err error) {
+func getChunkBasicHeader(r io.Reader) (basicHeader *ChunkBasicHeader, err error) {
 
 	var h uint32 = 0
 	h, err = byteio.ReadUint8(r)
@@ -79,7 +137,7 @@ func getChunkBasicHeader(r io.Reader) (fmt, csid uint32, err error) {
 		return
 	}
 
-	csid = h & 0x3f
+	csid := h & 0x3f
 	if csid == 0 {
 		csid, err = byteio.ReadUint8(r)
 		if err != nil {
@@ -94,22 +152,11 @@ func getChunkBasicHeader(r io.Reader) (fmt, csid uint32, err error) {
 		csid += 64
 	}
 
-	fmt = h >> 6
+	format := h >> 6
+
+	basicHeader = &ChunkBasicHeader{format: uint8(format), chunkStreamID: csid}
 
 	return
-}
-
-func (cs *ChunkStream) readChunkBasicHeader(r io.Reader) error {
-
-	fmt, csid, err := getChunkBasicHeader(r)
-	if err != nil {
-		return err
-	}
-
-	cs.tmpFromat = fmt
-	cs.CSID = csid
-
-	return err
 }
 
 /*
@@ -147,193 +194,219 @@ Formt == 2
 Format == 3
 0字节，它表示这个chunk的Message Header和上一个是完全相同的，无需再次传送
 */
-func (cs *ChunkStream) readChunkMessageHeader(r io.Reader) error {
+func readChunkMessageHeader(r io.Reader, chunkFmt uint8) (*ChunkMessageHeader, error) {
 
-	switch cs.tmpFromat {
+	switch chunkFmt {
 	case 0:
-		err := cs.readChunkMessageHeaderType0(r)
-		if err != nil {
-			return err
-		}
-		cs.allocDataBuffer()
+		return readChunkMessageHeaderType0(r)
 	case 1:
-		err := cs.readChunkMessageHeaderType1(r)
-		if err != nil {
-			return err
-		}
-		cs.allocDataBuffer()
+		return readChunkMessageHeaderType1(r)
 	case 2:
-		err := cs.readChunkMessageHeaderType2(r)
-		if err != nil {
-			return err
-		}
-		cs.allocDataBuffer()
+		return readChunkMessageHeaderType2(r)
 	case 3:
-		err := cs.readChunkMessageHeaderType3(r)
-		if err != nil {
-			return err
-		}
-
-	default:
-		return fmt.Errorf("invalid format=%d", cs.Format)
+		return &ChunkMessageHeader{}, nil
 	}
 
-	return nil
+	return nil, fmt.Errorf("unknown format:%d", chunkFmt)
 }
 
-func (cs *ChunkStream) readChunkMessageHeaderType0(r io.Reader) error {
+func readChunkMessageHeaderType0(r io.Reader) (*ChunkMessageHeader, error) {
 	buf := [11]byte{}
 	bulSlice := buf[0:len(buf)]
 	rLen, err := r.Read(bulSlice)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if rLen != len(buf) {
-		return fmt.Errorf("not read enough data")
+		return nil, fmt.Errorf("not read enough data")
 	}
 	bio := bytes.NewReader(bulSlice)
 
-	cs.Format = cs.tmpFromat
-	cs.Timestamp, _ = byteio.ReadUint24BE(bio)
-	cs.Length, _ = byteio.ReadUint24BE(bio)
-	cs.TypeID, _ = byteio.ReadUint8(bio)
-	cs.StreamID, _ = byteio.ReadUint32LE(bio)
+	chunk := &ChunkMessageHeader{}
 
-	cs.exted = false
-	if cs.Timestamp == 0xffffff {
-		err = cs.readChunkExtTimestamp(r)
+	chunk.timestamp, _ = byteio.ReadUint24BE(bio)
+	chunk.messaageLength, _ = byteio.ReadUint24BE(bio)
+	messageTypeID, _ := byteio.ReadUint8(bio)
+	chunk.messageTypeID = uint8(messageTypeID)
+	chunk.messageStreamID, _ = byteio.ReadUint32LE(bio)
+	chunk.isStreamIDExists = true
+
+	chunk.timestampExted = false
+	if chunk.timestamp == 0xffffff {
+		chunk.timestamp, err = readChunkExtTimestamp(r)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		chunk.timestampExted = true
 	}
 
-	return nil
+	return chunk, nil
 }
 
-func (cs *ChunkStream) readChunkMessageHeaderType1(r io.Reader) error {
+func readChunkMessageHeaderType1(r io.Reader) (*ChunkMessageHeader, error) {
 	buf := [7]byte{}
 	bulSlice := buf[0:len(buf)]
 	rLen, err := r.Read(bulSlice)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if rLen != len(buf) {
-		return fmt.Errorf("not read enough data")
+		return nil, fmt.Errorf("not read enough data")
 	}
 	bio := bytes.NewReader(bulSlice)
 
-	cs.Format = cs.tmpFromat
-	timeStamp, _ := byteio.ReadUint24BE(bio)
-	cs.Length, _ = byteio.ReadUint24BE(bio)
-	cs.TypeID, _ = byteio.ReadUint8(bio)
-	cs.exted = false
-	if timeStamp == 0xffffff {
-		err = cs.readChunkExtTimestamp(r)
+	chunk := &ChunkMessageHeader{}
+
+	chunk.timestamp, _ = byteio.ReadUint24BE(bio)
+	chunk.messaageLength, _ = byteio.ReadUint24BE(bio)
+	messageTypeID, _ := byteio.ReadUint8(bio)
+	chunk.messageTypeID = uint8(messageTypeID)
+	chunk.timestampExted = false
+
+	if chunk.timestamp == 0xffffff {
+		chunk.timestamp, err = readChunkExtTimestamp(r)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		chunk.timestampExted = true
 	}
 
-	return nil
+	return chunk, nil
 }
 
-func (cs *ChunkStream) readChunkMessageHeaderType2(r io.Reader) error {
+func readChunkMessageHeaderType2(r io.Reader) (*ChunkMessageHeader, error) {
 	timeStamp, err := byteio.ReadUint24BE(r)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	cs.exted = false
-	cs.Format = cs.tmpFromat
+
+	chunk := &ChunkMessageHeader{}
+
+	chunk.timestampExted = false
 
 	if timeStamp == 0xffffff {
-		err = cs.readChunkExtTimestamp(r)
+		chunk.timestamp, err = readChunkExtTimestamp(r)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		chunk.timestampExted = true
 	}
 
-	return nil
+	return chunk, nil
 }
 
-func (cs *ChunkStream) readChunkMessageHeaderType3(r io.Reader) (err error) {
-
-	if cs.remain == 0 {
-		if cs.exted {
-			err = cs.readChunkExtTimestamp(r)
-			if err != nil {
-				return err
-			}
-		}
-		cs.allocDataBuffer()
-	} else {
-		//这种情况扩展时间戳是多余的，读出来就行了
-		// 但是livego里面确检查时候和之前的时间戳相等，不等的话是不会读出来的？
-		if cs.exted {
-			timestamp, err := byteio.ReadUint32BE(r)
-			if timestamp != cs.timeDelta && timestamp != cs.Timestamp {
-				panic("remain chunk wrong ext timestamp")
-			}
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return
+func readChunkExtTimestamp(r io.Reader) (uint32, error) {
+	return byteio.ReadUint32BE(r)
 }
 
-func (cs *ChunkStream) readChunkExtTimestamp(r io.Reader) error {
-	timestamp, err := byteio.ReadUint32BE(r)
-	if err != nil {
-		return err
+func readChunkData(r io.Reader, remain, chunkSize uint32) ([]byte, error) {
+	readLen := remain
+	if readLen > chunkSize {
+		readLen = chunkSize
 	}
-	cs.exted = true
-	//format来判断ext timestamp是否为delta
-	if cs.Format == 0 {
-		cs.Timestamp = timestamp
-	} else {
-		cs.Timestamp += timestamp
-		cs.timeDelta = timestamp
-	}
-	return nil
-}
+	totalRead := readLen
 
-func (cs *ChunkStream) readChunkData(r io.Reader, chunkSize uint32) (err error) {
-	realReadLen := 0
-	shouldReadLen := chunkSize
-	if cs.remain < chunkSize {
-		shouldReadLen = cs.remain
-	}
+	data := make([]byte, readLen)
+	var retLen int = 0
+	var err error
+
 	for {
-		buf := cs.Data[cs.index : cs.index+shouldReadLen]
-		if realReadLen, err = r.Read(buf); err != nil {
-			return err
+		retLen, err = r.Read(data[totalRead-readLen : totalRead])
+		if err != nil {
+			return nil, err
 		}
-		cs.index += uint32(realReadLen)
-		cs.remain -= uint32(realReadLen)
-		shouldReadLen -= uint32(realReadLen)
-		if shouldReadLen == 0 {
+		readLen -= uint32(retLen)
+		if readLen == 0 {
+			return data, nil
+		}
+	}
+
+	return nil, fmt.Errorf("can't be here")
+}
+
+/*
+func (s *ChunkStreamSet) writeChunk(w io.Writer, localChunkSize int) error {
+	if cs.TypeID == av.TAG_AUDIO {
+		cs.CSID = 4
+	} else if cs.TypeID == av.TAG_VIDEO ||
+		cs.TypeID == av.TAG_SCRIPTDATAAMF0 ||
+		cs.TypeID == av.TAG_SCRIPTDATAAMF3 {
+		cs.CSID = 6
+	}
+
+	totalLen := uint32(0)
+	numChunks := (cs.Length / uint32(localChunkSize))
+	for i := uint32(0); i <= numChunks; i++ {
+		if totalLen == cs.Length {
 			break
 		}
-	}
-	if cs.remain == 0 {
-		cs.got = true
+		if i == 0 {
+			cs.Format = uint32(0)
+		} else {
+			cs.Format = uint32(3)
+		}
+		if err := cs.writeHeader(w); err != nil {
+			return err
+		}
+		inc := uint32(localChunkSize)
+		start := uint32(i) * uint32(localChunkSize)
+		if uint32(len(cs.Data))-start <= inc {
+			inc = uint32(len(cs.Data)) - start
+		}
+		totalLen += inc
+		end := start + inc
+		buf := cs.Data[start:end]
+		if _, err := w.Write(buf); err != nil {
+			return err
+		}
 	}
 
-	return
+	return nil
+
 }
 
-func (chunkStream *ChunkStream) readChunkWithoutBasicHeader(r io.Reader, chunkSize uint32) error {
-
-	//message超过chunksize，后面的chunk format一定是3
-	if chunkStream.remain != 0 && chunkStream.tmpFromat != 3 {
-		return fmt.Errorf("inlaid remin = %d", chunkStream.remain)
+func (cs *ChunkStream) writeHeader(w io.Writer) error {
+	//Chunk Basic Header
+	h := cs.Format << 6
+	switch {
+	case cs.CSID < 64:
+		h |= cs.CSID
+		byteio.WriteU8(w, h)
+	case cs.CSID-64 < 256:
+		h |= 0
+		byteio.WriteU8(w, h)
+		byteio.WriteU8(w, cs.CSID-64)
+	case cs.CSID-64 < 65536:
+		h |= 1
+		byteio.WriteU8(w, h)
+		byteio.WriteU16LE(w, cs.CSID-64)
 	}
-
-	err := chunkStream.readChunkMessageHeader(r)
-	if err != nil {
-		return err
+	//Chunk Message Header
+	ts := cs.Timestamp
+	if cs.Format == 3 {
+		goto END
 	}
-
-	return chunkStream.readChunkData(r, chunkSize)
+	if cs.Timestamp > 0xffffff {
+		ts = 0xffffff
+	}
+	byteio.WriteU24BE(w, ts)
+	if cs.Format == 2 {
+		goto END
+	}
+	if cs.Length > 0xffffff {
+		return fmt.Errorf("length=%d", cs.Length)
+	}
+	byteio.WriteU24BE(w, cs.Length)
+	byteio.WriteU8(w, cs.TypeID)
+	if cs.Format == 1 {
+		goto END
+	}
+	byteio.WriteU32LE(w, cs.ChunkStreamID)
+END:
+	//Extended Timestamp
+	if ts >= 0xffffff {
+		byteio.WriteU32BE(w, cs.Timestamp)
+	}
+	return nil
 }
+*/

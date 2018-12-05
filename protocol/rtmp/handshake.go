@@ -182,7 +182,6 @@ func complexHandshake(rw io.ReadWriter, C1TimeAndVersion []byte) (err error) {
 		return
 	}
 	fmt.Println(ok, block)
-
 	S0S1S2 := buf[1536*2:]
 	S0 := S0S1S2[:1]
 	S1 := S0S1S2[1 : 1536+1]

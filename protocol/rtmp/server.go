@@ -57,7 +57,7 @@ func (srv *Server) Serve(l net.Listener) error {
 	var tempDelay time.Duration // how long to sleep on accept failure
 
 	for {
-		rw, e := l.Accept()
+		netconn, e := l.Accept()
 		if e != nil {
 			select {
 			case <-srv.getDoneChan():
@@ -80,7 +80,7 @@ func (srv *Server) Serve(l net.Listener) error {
 			return e
 		}
 		tempDelay = 0
-		c := srv.newConn(rw)
+		c := NewConn(netconn, 4*1024)
 		log.Println("accept a rtmp connection")
 		go c.serve()
 	}
@@ -98,19 +98,4 @@ func (s *Server) getDoneChanLocked() chan struct{} {
 		s.doneChan = make(chan struct{})
 	}
 	return s.doneChan
-}
-
-func (srv *Server) newConn(netConn net.Conn) *conn {
-	c := &conn{
-		netConn: netConn,
-		server:  srv,
-
-		chunkSize:           128,
-		remoteChunkSize:     128,
-		windowAckSize:       2500000,
-		remoteWindowAckSize: 2500000,
-		chunks:              make(map[uint32]*ChunkStream),
-	}
-
-	return c
 }
