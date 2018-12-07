@@ -17,9 +17,9 @@ type ChunkBasicHeader struct {
 
 type ChunkMessageHeader struct {
 	timestamp        uint32
-	messaageLength   uint32
+	messageLength    uint32
 	messageTypeID    uint8
-	isStreamIDExists bool
+	isStreamIDExists bool // 表示messageStreamID是否存在，可以靠format判断，所以这里是否多余？
 	timestampExted   bool
 	messageStreamID  uint32
 }
@@ -28,6 +28,12 @@ type Chunk struct {
 	*ChunkBasicHeader
 	*ChunkMessageHeader
 	data []byte
+}
+
+//TODO chunkStream可以发送多个messageStream, 所以还是要记录chunk的信息，至少要记录上一次发送的messageStreamID
+type ChunkSerializer struct {
+	chunkSize    uint32
+	lastMSIDInfo map[uint32]uint32 // map[csid]msid
 }
 
 /*
@@ -80,24 +86,27 @@ func (s *ChunkStreamSet) ReadChunk(r io.Reader) (*Chunk, error) {
 		s.streams[chunkBasicHdr.chunkStreamID] = cs
 		cs.ChunkStreamID = chunkBasicHdr.chunkStreamID
 	}
-	cs.LastChunkFormat = chunkBasicHdr.format
 
 	chunkMessageHdr, err := readChunkMessageHeader(r, chunkBasicHdr.format)
 	if err != nil {
 		return nil, err
 	}
 
-	remain := chunkMessageHdr.messaageLength
-	if !chunkMessageHdr.isStreamIDExists {
+	remain := chunkMessageHdr.messageLength
+	if chunkBasicHdr.format > 0 {
 		stat, ok := s.statusGetter.GetMessageStreamStatus(cs.LastMessageStreamID)
 		if !ok {
 			return nil, fmt.Errorf("unknown status")
 		}
-		remain = stat.remain
+		chunkMessageHdr.messageStreamID = cs.LastMessageStreamID
+		if chunkBasicHdr.format > 1 {
+			remain = stat.remain
+		}
 	}
-	if remain > s.chunkSize {
-		remain = s.chunkSize
+	if chunkMessageHdr.isStreamIDExists {
+		cs.LastMessageStreamID = chunkMessageHdr.messageStreamID
 	}
+	cs.LastChunkFormat = chunkBasicHdr.format
 
 	data, err := readChunkData(r, remain, s.chunkSize)
 	if err != nil {
@@ -225,7 +234,7 @@ func readChunkMessageHeaderType0(r io.Reader) (*ChunkMessageHeader, error) {
 	chunk := &ChunkMessageHeader{}
 
 	chunk.timestamp, _ = byteio.ReadUint24BE(bio)
-	chunk.messaageLength, _ = byteio.ReadUint24BE(bio)
+	chunk.messageLength, _ = byteio.ReadUint24BE(bio)
 	messageTypeID, _ := byteio.ReadUint8(bio)
 	chunk.messageTypeID = uint8(messageTypeID)
 	chunk.messageStreamID, _ = byteio.ReadUint32LE(bio)
@@ -258,7 +267,7 @@ func readChunkMessageHeaderType1(r io.Reader) (*ChunkMessageHeader, error) {
 	chunk := &ChunkMessageHeader{}
 
 	chunk.timestamp, _ = byteio.ReadUint24BE(bio)
-	chunk.messaageLength, _ = byteio.ReadUint24BE(bio)
+	chunk.messageLength, _ = byteio.ReadUint24BE(bio)
 	messageTypeID, _ := byteio.ReadUint8(bio)
 	chunk.messageTypeID = uint8(messageTypeID)
 	chunk.timestampExted = false
@@ -281,7 +290,7 @@ func readChunkMessageHeaderType2(r io.Reader) (*ChunkMessageHeader, error) {
 	}
 
 	chunk := &ChunkMessageHeader{}
-
+	chunk.timestamp = timeStamp
 	chunk.timestampExted = false
 
 	if timeStamp == 0xffffff {
@@ -324,89 +333,24 @@ func readChunkData(r io.Reader, remain, chunkSize uint32) ([]byte, error) {
 	return nil, fmt.Errorf("can't be here")
 }
 
-/*
-func (s *ChunkStreamSet) writeChunk(w io.Writer, localChunkSize int) error {
-	if cs.TypeID == av.TAG_AUDIO {
-		cs.CSID = 4
-	} else if cs.TypeID == av.TAG_VIDEO ||
-		cs.TypeID == av.TAG_SCRIPTDATAAMF0 ||
-		cs.TypeID == av.TAG_SCRIPTDATAAMF3 {
-		cs.CSID = 6
-	}
+func (s *ChunkSerializer) SerializerChunk(chunkArray []*Chunk) ([]byte, error) {
+	/*
+		for idx, chunk := range chunkArray {
+			lastMSID, ok := s.lastMSIDInfo[chunk.chunkStreamID]
+			if !ok {
+				lastMSID = chunk.messageStreamID
+				s.lastMSIDInfo[chunk.chunkStreamID] = lastMSID
+			}
 
-	totalLen := uint32(0)
-	numChunks := (cs.Length / uint32(localChunkSize))
-	for i := uint32(0); i <= numChunks; i++ {
-		if totalLen == cs.Length {
-			break
 		}
-		if i == 0 {
-			cs.Format = uint32(0)
-		} else {
-			cs.Format = uint32(3)
-		}
-		if err := cs.writeHeader(w); err != nil {
-			return err
-		}
-		inc := uint32(localChunkSize)
-		start := uint32(i) * uint32(localChunkSize)
-		if uint32(len(cs.Data))-start <= inc {
-			inc = uint32(len(cs.Data)) - start
-		}
-		totalLen += inc
-		end := start + inc
-		buf := cs.Data[start:end]
-		if _, err := w.Write(buf); err != nil {
-			return err
-		}
-	}
-
-	return nil
-
+	*/
+	return nil, nil
 }
 
-func (cs *ChunkStream) writeHeader(w io.Writer) error {
-	//Chunk Basic Header
-	h := cs.Format << 6
-	switch {
-	case cs.CSID < 64:
-		h |= cs.CSID
-		byteio.WriteU8(w, h)
-	case cs.CSID-64 < 256:
-		h |= 0
-		byteio.WriteU8(w, h)
-		byteio.WriteU8(w, cs.CSID-64)
-	case cs.CSID-64 < 65536:
-		h |= 1
-		byteio.WriteU8(w, h)
-		byteio.WriteU16LE(w, cs.CSID-64)
-	}
-	//Chunk Message Header
-	ts := cs.Timestamp
-	if cs.Format == 3 {
-		goto END
-	}
-	if cs.Timestamp > 0xffffff {
-		ts = 0xffffff
-	}
-	byteio.WriteU24BE(w, ts)
-	if cs.Format == 2 {
-		goto END
-	}
-	if cs.Length > 0xffffff {
-		return fmt.Errorf("length=%d", cs.Length)
-	}
-	byteio.WriteU24BE(w, cs.Length)
-	byteio.WriteU8(w, cs.TypeID)
-	if cs.Format == 1 {
-		goto END
-	}
-	byteio.WriteU32LE(w, cs.ChunkStreamID)
-END:
-	//Extended Timestamp
-	if ts >= 0xffffff {
-		byteio.WriteU32BE(w, cs.Timestamp)
-	}
-	return nil
+func (s *ChunkSerializer) SetChunkSize(chunkSize uint32) {
+	s.chunkSize = chunkSize
 }
-*/
+
+func (s *ChunkSerializer) GetChunkSize() uint32 {
+	return s.chunkSize
+}

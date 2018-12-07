@@ -15,22 +15,31 @@ type RtmpMessageHandler interface {
 	OnProtocolControlMessaage(m *ProtocolControlMessaage) error
 	OnUserControlMessage(m *UserControlMessage) error
 	OnCommandMessage(m *CommandMessage) error
+	OnDataMessage(m *DataMessage) error
+	OnVideoMessage(m *VideoMessage) error
+	OnAudioMessage(m *AudioMessage) error
+	OnSharedObjectMessage(m *SharedObjectMessage) error
+	OnAggregateMessage(m *AggregateMessage) error
 }
 
 type RtmpHandler struct {
-	rw               io.ReadWriter //timeout is depend on rw
-	chunkStreamSet   *ChunkStreamSet
-	messageStreamSet *MessageStreamSet
-	messageHandler   RtmpMessageHandler
+	rw                   io.ReadWriter //timeout is depend on rw
+	chunkStreamSet       *ChunkStreamSet
+	messageStreamSet     *MessageStreamSet
+	messageHandler       RtmpMessageHandler
+	sendMessageStreamSet *SendMessageStreamSet
+	chunkSerializer      *ChunkSerializer
 }
 
 func NewRtmpHandler(rw io.ReadWriter, msgHandler RtmpMessageHandler) *RtmpHandler {
 	messageStreamSet := NewMessageStreamSet()
 	return &RtmpHandler{
-		rw:               rw,
-		chunkStreamSet:   NewChunkStreamSet(messageStreamSet),
-		messageStreamSet: messageStreamSet,
-		messageHandler:   msgHandler,
+		rw:                   rw,
+		chunkStreamSet:       NewChunkStreamSet(messageStreamSet),
+		messageStreamSet:     messageStreamSet,
+		messageHandler:       msgHandler,
+		chunkSerializer:      &ChunkSerializer{chunkSize: 128, lastMSIDInfo: make(map[uint32]uint32)},
+		sendMessageStreamSet: &SendMessageStreamSet{streams: make(map[uint32]*SendMessageStream)},
 	}
 }
 
@@ -60,7 +69,7 @@ func (h *RtmpHandler) Start() error {
 				if msg.StreamID != 0 {
 					return fmt.Errorf("msid:%d for proto ctrl msg", msg.StreamID)
 				}
-				h.messageHandler.OnProtocolControlMessaage((*ProtocolControlMessaage)(msg))
+				err = h.messageHandler.OnProtocolControlMessaage((*ProtocolControlMessaage)(msg))
 			case 4:
 				if chunk.chunkStreamID != 2 {
 					return fmt.Errorf("csid:%d for user ctrl msg", chunk.chunkStreamID)
@@ -68,13 +77,25 @@ func (h *RtmpHandler) Start() error {
 				if msg.StreamID != 0 {
 					return fmt.Errorf("msid:%d for user ctrl msg", msg.StreamID)
 				}
-				h.messageHandler.OnUserControlMessage((*UserControlMessage)(msg))
-			case 8, 9, 15, 16, 17, 18, 19, 20, 22:
-				h.messageHandler.OnCommandMessage((*CommandMessage)(msg))
-
+				err = h.messageHandler.OnUserControlMessage((*UserControlMessage)(msg))
+			case 8:
+				err = h.messageHandler.OnAudioMessage((*AudioMessage)(msg))
+			case 9:
+				err = h.messageHandler.OnVideoMessage((*VideoMessage)(msg))
+			case 15, 18:
+				err = h.messageHandler.OnDataMessage((*DataMessage)(msg))
+			case 17, 20:
+				if chunk.chunkStreamID < 3 {
+					return fmt.Errorf("csid:%d for cmd msg", chunk.chunkStreamID)
+				}
+				err = h.messageHandler.OnCommandMessage((*CommandMessage)(msg))
+			case 16, 19:
+				err = h.messageHandler.OnSharedObjectMessage((*SharedObjectMessage)(msg))
+			case 22:
+				err = h.messageHandler.OnAggregateMessage((*AggregateMessage)(msg))
 			}
 		}
 	}
 
-	return nil
+	return err
 }

@@ -10,7 +10,7 @@ func TestWriteMarker(t *testing.T) {
 	buf := new(bytes.Buffer)
 	n, err := WriteMarker(buf, AMF0_NUMBER_MARKER)
 	if err != nil {
-		t.Errorf("test %s err", "WriteMark", err)
+		t.Errorf("test %s err WriteMark", err.Error())
 	} else {
 		expect := []byte{0x00}
 		got := buf.Bytes()
