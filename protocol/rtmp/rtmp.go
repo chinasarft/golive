@@ -33,13 +33,14 @@ type RtmpHandler struct {
 
 func NewRtmpHandler(rw io.ReadWriter, msgHandler RtmpMessageHandler) *RtmpHandler {
 	messageStreamSet := NewMessageStreamSet()
+	sendMessageStreamSet := NewSendMessageStreamSet()
 	return &RtmpHandler{
 		rw:                   rw,
-		chunkStreamSet:       NewChunkStreamSet(messageStreamSet),
+		chunkStreamSet:       NewChunkStreamSet(128),
 		messageStreamSet:     messageStreamSet,
 		messageHandler:       msgHandler,
-		chunkSerializer:      &ChunkSerializer{chunkSize: 128, lastMSIDInfo: make(map[uint32]uint32)},
-		sendMessageStreamSet: &SendMessageStreamSet{streams: make(map[uint32]*SendMessageStream)},
+		chunkSerializer:      NewChunkSerializer(128, sendMessageStreamSet),
+		sendMessageStreamSet: &SendMessageStreamSet{sendStreams: make(map[uint32]*SendMessageStream)},
 	}
 }
 

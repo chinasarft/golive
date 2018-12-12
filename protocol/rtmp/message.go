@@ -17,14 +17,6 @@ var (
 
 )
 
-type MessageStreamStatus struct {
-	remain          uint32
-	messageStreamID uint32 // 暂时没用到, chunkstream 记录了
-}
-type MessageStreamStatusGetter interface {
-	GetMessageStreamStatus(streamID uint32) (*MessageStreamStatus, bool)
-}
-
 type PrevMessageStreamInfo struct {
 	prevMessageStreamID uint32
 	prevMessageLength   uint32
@@ -72,36 +64,22 @@ type MessageStreamSet struct {
 }
 
 type SendMessageStream struct {
-	lastMessageStreamID uint32
-	lastChunkStreamID   uint32
-	lastTimestamp       uint32
-	lastMessageTypeID   uint8
+	lastMessageStreamLength uint32
+	lastChunkStreamID       uint32
+	lastTimestamp           uint32
+	lastMessageTypeID       uint8
 }
 
 type SendMessageStreamSet struct {
-	streams map[uint32]*SendMessageStream
+	sendStreams map[uint32]*SendMessageStream
 }
 
 func NewMessageStreamSet() *MessageStreamSet {
 	return &MessageStreamSet{streams: make(map[uint32]*MessageStream)}
 }
 
-func (s *MessageStreamSet) GetMessageStreamStatus(streamID uint32) (*MessageStreamStatus, bool) {
-	messageStream, ok := s.streams[streamID]
-	if !ok {
-		return nil, false
-	}
-	if messageStream.isCollecting {
-		return &MessageStreamStatus{
-			remain:          messageStream.remain,
-			messageStreamID: messageStream.messageStreamID,
-		}, true
-	} else {
-		return &MessageStreamStatus{
-			remain:          messageStream.messageLength,
-			messageStreamID: messageStream.messageStreamID,
-		}, true
-	}
+func NewSendMessageStreamSet() *SendMessageStreamSet {
+	return &SendMessageStreamSet{sendStreams: make(map[uint32]*SendMessageStream)}
 }
 
 func (s *MessageStreamSet) HandleReceiveChunk(chunk *Chunk) (*Message, error) {
@@ -168,14 +146,21 @@ func (s *MessageStreamSet) getMessage(ms *MessageStream) *Message {
 	return message
 }
 
-// m是一个完整的消息，这个函数会拆分成chunk
-func (s *SendMessageStreamSet) MessageToChunk(m *Message, chunkSize uint32) ([]*Chunk, error) {
-
-	messageStream, ok := s.streams[m.StreamID]
+func (s *SendMessageStreamSet) upadateLastStreamInfo(m *Message, csid uint32) {
+	messageStream, ok := s.sendStreams[m.StreamID]
 	if !ok {
 		messageStream = &SendMessageStream{}
-		s.streams[m.StreamID] = messageStream
+		s.sendStreams[m.StreamID] = messageStream
 	}
+	messageStream.lastMessageStreamLength = m.PayloadLength
+	messageStream.lastMessageTypeID = m.MessageType
+	messageStream.lastTimestamp = m.Timestamp
+	messageStream.lastChunkStreamID = csid
+	return
+}
+
+// m是一个完整的消息，这个函数会拆分成chunk
+func (s *SendMessageStreamSet) MessageToChunk(m *Message, chunkSize uint32) ([]*Chunk, error) {
 
 	csid := 2
 	switch m.MessageType {
@@ -184,28 +169,18 @@ func (s *SendMessageStreamSet) MessageToChunk(m *Message, chunkSize uint32) ([]*
 			return nil, fmt.Errorf("send msg streamid:%d for prot ctrl msg", m.StreamID)
 		}
 		csid = 2
+	case 17, 20:
+		csid = 3
 	}
-	fmt.Println(csid)
+	fmt.Println("message.go:175", csid)
 
-	chunkArray, err := m.ToChunk(uint32(csid), chunkSize)
-
-	messageStream.lastMessageStreamID = m.StreamID
-	messageStream.lastMessageTypeID = m.MessageType
-	messageStream.lastTimestamp = m.Timestamp
-	if !ok {
-		messageStream.lastChunkStreamID = uint32(csid)
-	} else {
-		if messageStream.lastChunkStreamID != uint32(csid) {
-			panic("message csid is not same as before")
-		}
-	}
+	chunkArray, err := m.ToType0Chunk(uint32(csid), chunkSize)
 
 	return chunkArray, err
 }
 
-//这里只负责生成chunk，format全是0或者3，更精细的format的拆分在发送时候决定
-//都按照第一个是type 0来拆成chunk
-func (m *Message) ToChunk(chunkStreamID, chunkSize uint32) ([]*Chunk, error) {
+//这里只负责生成chunk，format全是0，更精细的format的拆分在发送时候决定
+func (m *Message) ToType0Chunk(chunkStreamID, chunkSize uint32) ([]*Chunk, error) {
 
 	payloadLen := len(m.Payload)
 
@@ -223,10 +198,10 @@ func (m *Message) ToChunk(chunkStreamID, chunkSize uint32) ([]*Chunk, error) {
 	}
 	var chunks []*Chunk
 
-	appendChunk := func(basicHdr *ChunkBasicHeader) {
+	appendChunk := func() {
 
 		chunk := &Chunk{
-			ChunkBasicHeader:   basicHdr,
+			ChunkBasicHeader:   chunkBasicHdr,
 			ChunkMessageHeader: chunkMsgHdr,
 		}
 
@@ -242,13 +217,11 @@ func (m *Message) ToChunk(chunkStreamID, chunkSize uint32) ([]*Chunk, error) {
 		chunks = append(chunks, chunk)
 	}
 
-	appendChunk(chunkBasicHdr)
+	appendChunk()
 
-	chunkBasicHdr3 := &ChunkBasicHeader{format: 3, chunkStreamID: chunkStreamID}
-	//type 3
-	//这里所有chunk都共用了chunkMsgHdr，type3 chunk都共用了chunkBasicHdr3
+	//这里所有chunk都共用了chunkMsgHdr chunkBasicHdr3
 	for payloadLen > 0 {
-		appendChunk(chunkBasicHdr3)
+		appendChunk()
 	}
 
 	return chunks, nil
@@ -325,4 +298,17 @@ func NewConnectSuccessMessage() (*Message, error) {
 
 	message.Payload = data
 	return message, nil
+}
+
+func (s *SendMessageStreamSet) GetSendMessageStreamStatus(streamID uint32) (*SendMessageStreamStatus, bool) {
+	messageStream, ok := s.sendStreams[streamID]
+	if !ok {
+		return nil, false
+	}
+	return &SendMessageStreamStatus{
+		timeStamp:     messageStream.lastTimestamp,
+		messageLength: messageStream.lastMessageStreamLength,
+		messageTypeID: messageStream.lastMessageTypeID,
+		chunkStreamID: messageStream.lastChunkStreamID,
+	}, true
 }

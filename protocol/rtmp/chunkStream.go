@@ -30,12 +30,6 @@ type Chunk struct {
 	data []byte
 }
 
-//TODO chunkStream可以发送多个messageStream, 所以还是要记录chunk的信息，至少要记录上一次发送的messageStreamID
-type ChunkSerializer struct {
-	chunkSize    uint32
-	lastMSIDInfo map[uint32]uint32 // map[csid]msid
-}
-
 /*
 +--------------+----------------+--------------------+--------------+
  | Basic Header | Message Header | Extended Timestamp |  Chunk Data  |
@@ -47,25 +41,39 @@ type ChunkSerializer struct {
 
 //Different message streams multiplexed onto the same chunk stream
 //      are demultiplexed based on their message stream IDs
-//一个chunkstream上可以跑多个messagestream。 但是目前抓包没有看到过这样做的
-//但是以message为中心应该可以的
 type ChunkStream struct {
-	LastMessageStreamID uint32
-	LastChunkFormat     uint8
-	ChunkStreamID       uint32
+	ChunkBasicHeader
+	ChunkMessageHeader
+	ChunkStreamID uint32
+	remain        uint32
 }
 
 type ChunkStreamSet struct {
-	streams      map[uint32]*ChunkStream
-	statusGetter MessageStreamStatusGetter
-	chunkSize    uint32
+	streams   map[uint32]*ChunkStream
+	chunkSize uint32
 }
 
-func NewChunkStreamSet(getStatus MessageStreamStatusGetter) *ChunkStreamSet {
+type SendMessageStreamStatus struct {
+	timeStamp     uint32
+	messageLength uint32
+	chunkStreamID uint32
+	messageTypeID uint8
+}
+
+type SendMessageStreamStatusGetter interface {
+	GetSendMessageStreamStatus(streamID uint32) (*SendMessageStreamStatus, bool)
+}
+
+type ChunkSerializer struct {
+	sendChunkSize           uint32
+	sendStreams             map[uint32]*ChunkStream // 一个chunkStream可以发送多个messageStream，所以这里还是要需要该信息
+	lastMsgStreamInfoGetter SendMessageStreamStatusGetter
+}
+
+func NewChunkStreamSet(chunkSize uint32) *ChunkStreamSet {
 	return &ChunkStreamSet{
-		streams:      make(map[uint32]*ChunkStream),
-		statusGetter: getStatus,
-		chunkSize:    128,
+		streams:   make(map[uint32]*ChunkStream),
+		chunkSize: chunkSize,
 	}
 }
 
@@ -92,26 +100,30 @@ func (s *ChunkStreamSet) ReadChunk(r io.Reader) (*Chunk, error) {
 		return nil, err
 	}
 
-	remain := chunkMessageHdr.messageLength
-	if chunkBasicHdr.format > 0 {
-		stat, ok := s.statusGetter.GetMessageStreamStatus(cs.LastMessageStreamID)
-		if !ok {
-			return nil, fmt.Errorf("unknown status")
-		}
-		chunkMessageHdr.messageStreamID = cs.LastMessageStreamID
-		if chunkBasicHdr.format > 1 {
-			remain = stat.remain
+	if cs.remain == 0 {
+		switch chunkBasicHdr.format {
+		case 0:
+			cs.ChunkBasicHeader = *chunkBasicHdr
+			cs.ChunkMessageHeader = *chunkMessageHdr
+			fallthrough
+		case 1:
+			cs.remain = chunkMessageHdr.messageLength
+		case 2:
+			fallthrough
+		case 3:
+			cs.remain = cs.messageLength
 		}
 	}
-	if chunkMessageHdr.isStreamIDExists {
-		cs.LastMessageStreamID = chunkMessageHdr.messageStreamID
+	if !chunkMessageHdr.isStreamIDExists {
+		chunkMessageHdr.messageStreamID = cs.messageStreamID
 	}
-	cs.LastChunkFormat = chunkBasicHdr.format
 
-	data, err := readChunkData(r, remain, s.chunkSize)
+	data, err := readChunkData(r, cs.remain, s.chunkSize)
 	if err != nil {
 		return nil, err
 	}
+
+	cs.remain -= uint32(len(data))
 
 	return &Chunk{chunkBasicHdr, chunkMessageHdr, data}, nil
 }
@@ -333,24 +345,58 @@ func readChunkData(r io.Reader, remain, chunkSize uint32) ([]byte, error) {
 	return nil, fmt.Errorf("can't be here")
 }
 
-func (s *ChunkSerializer) SerializerChunk(chunkArray []*Chunk) ([]byte, error) {
-	/*
-		for idx, chunk := range chunkArray {
-			lastMSID, ok := s.lastMSIDInfo[chunk.chunkStreamID]
-			if !ok {
-				lastMSID = chunk.messageStreamID
-				s.lastMSIDInfo[chunk.chunkStreamID] = lastMSID
-			}
+func NewChunkSerializer(chunkSize uint32, lastMsgStreamInfoGetter SendMessageStreamStatusGetter) *ChunkSerializer {
+	return &ChunkSerializer{
+		sendChunkSize:           chunkSize,
+		sendStreams:             make(map[uint32]*ChunkStream),
+		lastMsgStreamInfoGetter: lastMsgStreamInfoGetter,
+	}
+}
 
+func (s *ChunkSerializer) SerializerChunk(chunkArray []*Chunk, w *bytes.Buffer) error {
+
+	lastMSID := uint32(0)
+
+	var lastStat *SendMessageStreamStatus = nil
+	var isExists bool = false
+	for idx, chunk := range chunkArray {
+		cs, ok := s.sendStreams[chunk.chunkStreamID]
+		if !ok {
+			cs = &ChunkStream{}
+			s.sendStreams[chunk.chunkStreamID] = cs
+			//chunk.SerializeType0(w)
+			continue
 		}
-	*/
-	return nil, nil
+
+		if idx == 0 || lastMSID != chunk.messageStreamID {
+			lastStat, isExists = s.lastMsgStreamInfoGetter.GetSendMessageStreamStatus(chunk.messageStreamID)
+			lastMSID = chunk.messageStreamID
+		}
+
+		// TODO判断 format类型
+		if lastStat != nil && isExists {
+			if lastStat.messageLength == chunk.messageLength && lastStat.messageTypeID == chunk.messageTypeID {
+				if lastStat.timeStamp == chunk.timestamp {
+					// type 3
+				} else {
+					// type 2
+				}
+
+			} else {
+				// type 1
+			}
+		} else {
+			// type 0
+		}
+	}
+
+	return nil
 }
 
 func (s *ChunkSerializer) SetChunkSize(chunkSize uint32) {
-	s.chunkSize = chunkSize
+	s.sendChunkSize = chunkSize
 }
 
 func (s *ChunkSerializer) GetChunkSize() uint32 {
-	return s.chunkSize
+	return s.sendChunkSize
 }

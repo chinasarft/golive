@@ -109,28 +109,37 @@ func (recv *RtmpReceiver) handleConnectCommand(r amf.Reader) error {
 			if e == io.EOF {
 				break
 			}
-			fmt.Println("--->", e)
+			fmt.Println("handleconnect--->", e)
 			return e
 		}
-		fmt.Println("value:", v)
+		fmt.Println("handleconnect value:", v)
 	}
+
+	w := &bytes.Buffer{}
 
 	ackMsg := NewAckMessage(2500000)
+	chunkArray, err := recv.sendMessageStreamSet.MessageToChunk(ackMsg, recv.chunkSerializer.sendChunkSize)
+	if err != nil {
+		return err
+	}
+	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	if err != nil {
+		return err
+	}
+	recv.sendMessageStreamSet.upadateLastStreamInfo(ackMsg, chunkArray[0].chunkStreamID)
+
 	setPeerBandwidthMsg := NewSetPeerBandwidthMessage(2500000, 2)
-
-	chunkArray, err := recv.sendMessageStreamSet.MessageToChunk(ackMsg, recv.chunkSerializer.chunkSize)
+	chunkArray, err = recv.sendMessageStreamSet.MessageToChunk(setPeerBandwidthMsg, recv.chunkSerializer.sendChunkSize)
 	if err != nil {
 		return err
 	}
-
-	chkArr, err := recv.sendMessageStreamSet.MessageToChunk(setPeerBandwidthMsg, recv.chunkSerializer.chunkSize)
+	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
-	chunkArray = append(chunkArray, chkArr...)
+	recv.sendMessageStreamSet.upadateLastStreamInfo(setPeerBandwidthMsg, chunkArray[0].chunkStreamID)
 
 	bakChunkSize := recv.chunkSerializer.GetChunkSize()
-
 	defer func() {
 		if err != nil {
 			recv.chunkSerializer.SetChunkSize(bakChunkSize)
@@ -140,27 +149,31 @@ func (recv *RtmpReceiver) handleConnectCommand(r amf.Reader) error {
 	recv.chunkSerializer.SetChunkSize(1024)
 
 	setChunkMsg := NewSetChunkSizeMessage(recv.chunkSerializer.GetChunkSize())
-	chkArr, err = recv.sendMessageStreamSet.MessageToChunk(setChunkMsg, recv.chunkSerializer.chunkSize)
+	chunkArray, err = recv.sendMessageStreamSet.MessageToChunk(setChunkMsg, recv.chunkSerializer.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	chunkArray = append(chunkArray, chkArr...)
+	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	if err != nil {
+		return err
+	}
+	recv.sendMessageStreamSet.upadateLastStreamInfo(setChunkMsg, chunkArray[0].chunkStreamID)
 
 	connectOkMsg, err := NewConnectSuccessMessage()
 	if err != nil {
 		return err
 	}
-	chkArr, err = recv.sendMessageStreamSet.MessageToChunk(connectOkMsg, recv.chunkSerializer.chunkSize)
+	chunkArray, err = recv.sendMessageStreamSet.MessageToChunk(connectOkMsg, recv.chunkSerializer.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	chunkArray = append(chunkArray, chkArr...)
+	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	if err != nil {
+		return err
+	}
+	recv.sendMessageStreamSet.upadateLastStreamInfo(connectOkMsg, chunkArray[0].chunkStreamID)
 
-	data, err := recv.chunkSerializer.SerializerChunk(chunkArray)
-	if err != nil {
-		return err
-	}
-	_, err = recv.rw.Write(data)
+	_, err = recv.rw.Write(w.Bytes())
 
 	return err
 }
@@ -171,10 +184,10 @@ func (recv *RtmpReceiver) handleCreateStreamCommand(r amf.Reader) error {
 			if e == io.EOF {
 				break
 			}
-			fmt.Println("--->", e)
+			fmt.Println("create stream--->", e)
 			return e
 		}
-		fmt.Println("value:", v)
+		fmt.Println("createstream value:", v)
 	}
 	return nil
 }
