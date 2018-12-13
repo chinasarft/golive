@@ -59,3 +59,43 @@ func TestWriteArrayAsSiblingButElemArrayAsArray(t *testing.T) {
 	}
 
 }
+
+func TestWriteArrayAsSiblingButElemArrayAsObject(t *testing.T) {
+	var values []interface{}
+	values = append(values, "_result")
+	values = append(values, 1)
+
+	obj1 := []interface{}{
+		"fmsVer", "FMS/3,0,1,123",
+		"capabilities", 31,
+	}
+	values = append(values, obj1)
+
+	obj2 := []interface{}{
+		"level", "status",
+		"code", "NetConnection.Connect.Success",
+		"description", "Connection succeeded.",
+		"objectEncoding", 0,
+	}
+	values = append(values, obj2)
+
+	data, err := WriteArrayAsSiblingButElemArrayAsObject(values)
+	if err != nil {
+		t.Fatalf("WriteArrayAsSiblingButElemArrayAsObject:%s", err.Error())
+	}
+
+	connectRespMsg := "0200075f726573756c74003ff0000000000000030006666d7356657202000d464d532f332c302c312c313233000c63617061" +
+		"62696c697469657300403f0000000000000000090300056c6576656c0200067374617475730004636f646502001d4e657443" +
+		"6f6e6e656374696f6e2e436f6e6e6563742e53756363657373000b6465736372697074696f6e020015436f6e6e656374696f" +
+		"6e207375636365656465642e000e6f626a656374456e636f64696e67000000000000000000000009"
+
+	connectRespMsgByte := make([]byte, len(connectRespMsg)/2)
+	_, err = hex.Decode(connectRespMsgByte, []byte(connectRespMsg))
+	if err != nil {
+		t.Errorf("hex decode msg fail:%s", err)
+	}
+
+	if !bytes.Equal(data, connectRespMsgByte) {
+		t.Fatalf("amftools.go test fail:%d %d", len(data), len(connectRespMsgByte))
+	}
+}
