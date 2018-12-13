@@ -53,21 +53,9 @@ type ChunkStreamSet struct {
 	chunkSize uint32
 }
 
-type SendMessageStreamStatus struct {
-	timeStamp     uint32
-	messageLength uint32
-	chunkStreamID uint32
-	messageTypeID uint8
-}
-
-type SendMessageStreamStatusGetter interface {
-	GetSendMessageStreamStatus(streamID uint32) (*SendMessageStreamStatus, bool)
-}
-
 type ChunkSerializer struct {
-	sendChunkSize           uint32
-	sendStreams             map[uint32]*ChunkStream // 一个chunkStream可以发送多个messageStream，所以这里还是要需要该信息
-	lastMsgStreamInfoGetter SendMessageStreamStatusGetter
+	sendChunkSize uint32
+	sendStreams   map[uint32]*ChunkStream // 一个chunkStream可以发送多个messageStream，所以这里还是要需要该信息
 }
 
 func NewChunkStreamSet(chunkSize uint32) *ChunkStreamSet {
@@ -345,49 +333,136 @@ func readChunkData(r io.Reader, remain, chunkSize uint32) ([]byte, error) {
 	return nil, fmt.Errorf("can't be here")
 }
 
-func NewChunkSerializer(chunkSize uint32, lastMsgStreamInfoGetter SendMessageStreamStatusGetter) *ChunkSerializer {
+func NewChunkSerializer(chunkSize uint32) *ChunkSerializer {
 	return &ChunkSerializer{
-		sendChunkSize:           chunkSize,
-		sendStreams:             make(map[uint32]*ChunkStream),
-		lastMsgStreamInfoGetter: lastMsgStreamInfoGetter,
+		sendChunkSize: chunkSize,
+		sendStreams:   make(map[uint32]*ChunkStream),
 	}
 }
 
-func (s *ChunkSerializer) SerializerChunk(chunkArray []*Chunk, w *bytes.Buffer) error {
+func serializerChunkBasicHeader(fmt uint8, csid uint32, w *bytes.Buffer) {
 
-	lastMSID := uint32(0)
+	h := fmt << 6
+	if csid < 64 {
+		w.WriteByte(byte(h | uint8(csid)))
+	} else if csid < 256+64 {
+		w.WriteByte(byte(h))
+		w.WriteByte(byte(csid - 63))
+	} else {
+		w.WriteByte(byte(h + 1))
+		csid -= 63
+		w.WriteByte(byte(csid - 63))
+		w.WriteByte(byte(csid % 256))
+		w.WriteByte(byte(csid / 256))
+	}
 
-	var lastStat *SendMessageStreamStatus = nil
-	var isExists bool = false
-	for idx, chunk := range chunkArray {
+	return
+}
+
+func serializerChunkDeltaTime(w *bytes.Buffer, deltaTime uint32) {
+	if deltaTime < 0xffffff {
+		byteio.WriteU24BE(w, deltaTime)
+	} else {
+		w.WriteByte(0xff)
+		w.WriteByte(0xff)
+		w.WriteByte(0xff)
+		byteio.WriteU32BE(w, deltaTime)
+	}
+}
+
+func serializerChunkMessageHeaderNoStreamID(msgHdr *ChunkMessageHeader, w *bytes.Buffer) {
+	byteio.WriteU24BE(w, msgHdr.timestamp)
+	byteio.WriteU24BE(w, msgHdr.messageLength)
+	w.WriteByte(msgHdr.messageTypeID)
+}
+
+func serializerChunkMessageHeaderType1(msgHdr *ChunkMessageHeader, w *bytes.Buffer) {
+	serializerChunkMessageHeaderNoStreamID(msgHdr, w)
+	if msgHdr.timestamp > 0xffffff {
+		byteio.WriteU32BE(w, msgHdr.timestamp)
+	}
+}
+
+func serializerChunkMessageHeader(msgHdr *ChunkMessageHeader, w *bytes.Buffer) {
+	serializerChunkMessageHeaderNoStreamID(msgHdr, w)
+	byteio.WriteU32BE(w, msgHdr.messageStreamID)
+	if msgHdr.timestamp > 0xffffff {
+		byteio.WriteU32BE(w, msgHdr.timestamp)
+	}
+}
+
+func (c *Chunk) serializerType0(w *bytes.Buffer) error {
+	serializerChunkBasicHeader(0, c.ChunkBasicHeader.chunkStreamID, w)
+	serializerChunkMessageHeader(c.ChunkMessageHeader, w)
+	w.Write(c.data)
+	return nil
+}
+
+func (c *Chunk) serializerType1(w *bytes.Buffer, deltaTime uint32) error {
+	serializerChunkBasicHeader(1, c.ChunkBasicHeader.chunkStreamID, w)
+	serializerChunkMessageHeaderType1(c.ChunkMessageHeader, w)
+	w.Write(c.data)
+	return nil
+}
+
+func (c *Chunk) serializerType2(w *bytes.Buffer, deltaTime uint32) error {
+	serializerChunkBasicHeader(2, c.ChunkBasicHeader.chunkStreamID, w)
+	serializerChunkDeltaTime(w, deltaTime)
+	w.Write(c.data)
+	return nil
+}
+
+func (c *Chunk) serializerType3(w *bytes.Buffer) error {
+	serializerChunkBasicHeader(3, c.ChunkBasicHeader.chunkStreamID, w)
+	w.Write(c.data)
+	return nil
+}
+
+func (s *ChunkSerializer) SerializerChunk(chunkArray []*Chunk, w *bytes.Buffer) (err error) {
+
+	for _, chunk := range chunkArray {
+
+		if err != nil {
+			return err
+		}
+
 		cs, ok := s.sendStreams[chunk.chunkStreamID]
 		if !ok {
 			cs = &ChunkStream{}
 			s.sendStreams[chunk.chunkStreamID] = cs
-			//chunk.SerializeType0(w)
-			continue
+			cs.ChunkStreamID = chunk.chunkStreamID
 		}
 
-		if idx == 0 || lastMSID != chunk.messageStreamID {
-			lastStat, isExists = s.lastMsgStreamInfoGetter.GetSendMessageStreamStatus(chunk.messageStreamID)
-			lastMSID = chunk.messageStreamID
-		}
-
-		// TODO判断 format类型
-		if lastStat != nil && isExists {
-			if lastStat.messageLength == chunk.messageLength && lastStat.messageTypeID == chunk.messageTypeID {
-				if lastStat.timeStamp == chunk.timestamp {
-					// type 3
+		if !ok || cs.messageStreamID != chunk.messageStreamID {
+			cs.ChunkBasicHeader = *chunk.ChunkBasicHeader
+			cs.ChunkMessageHeader = *chunk.ChunkMessageHeader
+			cs.format = 0
+			err = chunk.serializerType0(w)
+		} else {
+			if cs.messageStreamID != chunk.messageStreamID {
+				panic("msid should equal")
+			}
+			if cs.messageLength == chunk.messageLength && cs.messageTypeID == chunk.messageTypeID {
+				if cs.timestamp == chunk.timestamp {
+					chunk.serializerType3(w)
+					cs.format = 3
 				} else {
-					// type 2
+					deltaTime := chunk.timestamp - cs.timestamp
+					chunk.serializerType2(w, deltaTime)
+					cs.format = 2
+					cs.timestamp = chunk.timestamp
 				}
 
 			} else {
-				// type 1
+				deltaTime := chunk.timestamp - cs.timestamp
+				chunk.serializerType1(w, deltaTime)
+				cs.format = 1
+				cs.timestamp = chunk.timestamp
+				cs.messageLength = chunk.messageLength
+				cs.messageTypeID = chunk.messageTypeID
 			}
-		} else {
-			// type 0
 		}
+
 	}
 
 	return nil

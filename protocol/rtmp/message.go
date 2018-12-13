@@ -299,16 +299,3 @@ func NewConnectSuccessMessage() (*Message, error) {
 	message.Payload = data
 	return message, nil
 }
-
-func (s *SendMessageStreamSet) GetSendMessageStreamStatus(streamID uint32) (*SendMessageStreamStatus, bool) {
-	messageStream, ok := s.sendStreams[streamID]
-	if !ok {
-		return nil, false
-	}
-	return &SendMessageStreamStatus{
-		timeStamp:     messageStream.lastTimestamp,
-		messageLength: messageStream.lastMessageStreamLength,
-		messageTypeID: messageStream.lastMessageTypeID,
-		chunkStreamID: messageStream.lastChunkStreamID,
-	}, true
-}
