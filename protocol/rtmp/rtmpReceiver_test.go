@@ -60,18 +60,25 @@ var (
 		"a0206570e818323baeca533a306809e50c6ec21876a9fc5aba77699277ffff69e8e73aeead5883629633048154b04382afd6" +
 		"19fa7f9163f729742dffe2d9dff8dcdd9ffd732a25ce938932104533955e9b829b32a7829afc4a416f0dffeea025c24ea776" +
 		"675254bc8b8f0530cc0630c1253c8072312c4a38541131dd2d3b3df830356133534c30ec"
+
+	connectRespMsg = "020000000000040500000000002625a0020000000000050600000000002625a0020200000000000401000000000000040003" +
+		"0000000000be14000000000200075f726573756c74003ff0000000000000030006666d7356657202000d464d532f332c302c" +
+		"312c313233000c6361706162696c697469657300403f0000000000000000090300056c6576656c0200067374617475730004" +
+		"636f646502001d4e6574436f6e6e656374696f6e2e436f6e6e6563742e53756363657373000b6465736372697074696f6e02" +
+		"0015436f6e6e656374696f6e207375636365656465642e000e6f626a656374456e636f64696e670000000000000000000000" +
+		"09"
 )
 
 type testRecv struct {
 	r         io.Reader
 	writeChan chan int
-	writeBuf  []byte
+	writeBuf  *bytes.Buffer
 }
 
 func newTestRecv(msg []byte) *testRecv {
 	return &testRecv{
 		r:         bytes.NewReader(msg),
-		writeBuf:  make([]byte, 0, 1024*10),
+		writeBuf:  &bytes.Buffer{},
 		writeChan: make(chan int),
 	}
 }
@@ -81,8 +88,7 @@ func (hs *testRecv) Read(p []byte) (n int, err error) {
 }
 
 func (hs *testRecv) Write(p []byte) (n int, err error) {
-	copy(hs.writeBuf[len(hs.writeBuf):], p)
-	return len(p), nil
+	return hs.writeBuf.Write(p)
 }
 
 func TestRtmpReceiver(t *testing.T) {
@@ -99,7 +105,21 @@ func TestRtmpReceiver(t *testing.T) {
 	recv := NewRtmpReceiver(rw)
 
 	err = recv.Start()
-	if err != nil {
+	if err != nil && err != io.EOF {
 		t.Fatal("recv.Start", err)
+	}
+
+	connectRespMsgByte := make([]byte, len(connectRespMsg)/2)
+	_, err = hex.Decode(connectRespMsgByte, []byte(connectRespMsg))
+	if err != nil {
+		t.Errorf("hex decode msg fail:%s", err)
+	}
+
+	offset := 1 + 1536 + 1536 // 1 for s0, 1536 s1 s2
+	allresp := rw.writeBuf.Bytes()
+	realConnectResp := allresp[offset : offset+len(connectRespMsgByte)]
+	//这里因为 amf object使用map，所以是乱序的，不相等
+	if bytes.Compare(connectRespMsgByte, realConnectResp) != 0 {
+		t.Fatalf("connect response msg not equal:")
 	}
 }

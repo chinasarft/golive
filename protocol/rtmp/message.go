@@ -277,21 +277,21 @@ func NewConnectSuccessMessage() (*Message, error) {
 	values = append(values, "_result")
 	values = append(values, 1)
 
-	obj1 := map[string]interface{}{
-		"capabilities": 31,
-		"fmsVer":       "FMS/3,0,1,123",
+	obj1 := []interface{}{
+		"fmsVer", "FMS/3,0,1,123",
+		"capabilities", 31,
 	}
 	values = append(values, obj1)
 
-	obj2 := map[string]interface{}{
-		"level":          "status",
-		"code":           "NetConnection.Connect.Success",
-		"description":    "Connection succeeded.",
-		"objectEncoding": 0,
+	obj2 := []interface{}{
+		"level", "status",
+		"code", "NetConnection.Connect.Success",
+		"description", "Connection succeeded.",
+		"objectEncoding", 0,
 	}
 	values = append(values, obj2)
 
-	data, err := amf.WriteArrayAsSiblingButElemArrayAsArray(values)
+	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
 	if err != nil {
 		return nil, err
 	}

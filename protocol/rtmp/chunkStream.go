@@ -433,7 +433,13 @@ func (s *ChunkSerializer) SerializerChunk(chunkArray []*Chunk, w *bytes.Buffer) 
 			cs.ChunkStreamID = chunk.chunkStreamID
 		}
 
-		if !ok || cs.messageStreamID != chunk.messageStreamID {
+		isProtoCtrlMsg := false
+		if chunk.chunkStreamID == 2 && chunk.messageStreamID == 0 &&
+			chunk.messageTypeID != 4 && chunk.messageTypeID < 7 {
+			isProtoCtrlMsg = true
+		}
+
+		if isProtoCtrlMsg || cs.messageStreamID != chunk.messageStreamID || !ok {
 			cs.ChunkBasicHeader = *chunk.ChunkBasicHeader
 			cs.ChunkMessageHeader = *chunk.ChunkMessageHeader
 			cs.format = 0
