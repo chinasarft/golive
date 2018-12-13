@@ -118,7 +118,7 @@ func TestRtmpReceiver(t *testing.T) {
 	offset := 1 + 1536 + 1536 // 1 for s0, 1536 s1 s2
 	allresp := rw.writeBuf.Bytes()
 	realConnectResp := allresp[offset : offset+len(connectRespMsgByte)]
-	//这里因为 amf object使用map，所以是乱序的，不相等
+
 	if bytes.Compare(connectRespMsgByte, realConnectResp) != 0 {
 		t.Fatalf("connect response msg not equal:")
 	}

@@ -385,7 +385,7 @@ func serializerChunkMessageHeaderType1(msgHdr *ChunkMessageHeader, w *bytes.Buff
 
 func serializerChunkMessageHeader(msgHdr *ChunkMessageHeader, w *bytes.Buffer) {
 	serializerChunkMessageHeaderNoStreamID(msgHdr, w)
-	byteio.WriteU32BE(w, msgHdr.messageStreamID)
+	byteio.WriteU32LE(w, msgHdr.messageStreamID)
 	if msgHdr.timestamp > 0xffffff {
 		byteio.WriteU32BE(w, msgHdr.timestamp)
 	}

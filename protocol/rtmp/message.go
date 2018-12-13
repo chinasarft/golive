@@ -17,25 +17,15 @@ var (
 
 )
 
-type PrevMessageStreamInfo struct {
-	prevMessageStreamID uint32
-	prevMessageLength   uint32
-	prevTimestamp       uint32
-	prevMessageTypeID   uint8
-}
-type PrevMessageStreamInfoGetter interface {
-	GetPrevMessageStreamInfo(streamID uint32) (*PrevMessageStreamInfo, bool)
-}
-
 type Message struct {
 	MessageType   uint8  `type:int endian:big length:1`
 	PayloadLength uint32 `type:int endian:big length:3`
 	Timestamp     uint32 `type:int endian:big length:4`
-	StreamID      uint32 `type:int endian:big length:3`
+	StreamID      uint32 `type:int endian:little length:3`
 	Payload       []byte `type:byte`
 }
 
-//这三种消息，按照文档里面来分的
+// 消息按照文档里面来分的
 type ProtocolControlMessaage Message //chapter 5.4
 type CommandMessage Message          //chapter 6.2
 type UserControlMessage Message      //chapter 7
@@ -290,6 +280,59 @@ func NewConnectSuccessMessage() (*Message, error) {
 		"objectEncoding", 0,
 	}
 	values = append(values, obj2)
+
+	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
+	if err != nil {
+		return nil, err
+	}
+
+	message.Payload = data
+	return message, nil
+}
+
+func NewCreateStreamSuccessMessage() (*Message, error) {
+	message := &Message{
+		MessageType:   0x14,
+		PayloadLength: 4,
+		Timestamp:     0,
+		StreamID:      0,
+	}
+
+	var values []interface{}
+	values = append(values, "_result")
+	values = append(values, 4)
+	values = append(values, nil)
+	values = append(values, 1)
+
+	data, err := amf.WriteArrayAsSiblingButElemArrayAsArray(values)
+	if err != nil {
+		return nil, err
+	}
+
+	message.Payload = data
+	return message, nil
+}
+
+func NewPublishSuccessMessage() (*Message, error) {
+
+	message := &Message{
+		MessageType:   0x14,
+		PayloadLength: 4,
+		Timestamp:     0,
+		StreamID:      0,
+	}
+
+	var values []interface{}
+	values = append(values, "onStatus")
+	values = append(values, 0)
+	values = append(values, nil)
+
+	obj1 := []interface{}{
+		"description", "publishing",
+		"level", "status",
+		"code", "NetStream.Publish.Start",
+	}
+	values = append(values, obj1)
 
 	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
 	if err != nil {

@@ -63,6 +63,11 @@ func (recv *RtmpReceiver) OnCommandMessage(m *CommandMessage) error {
 					return recv.handleCreateStreamCommand(r)
 				case "publish":
 					fmt.Println("receive publish command")
+					return recv.handlePublishCommand(r)
+				case "FCUnpublish":
+					fmt.Println("receive FCUnpublish command")
+				case "deleteStream":
+					fmt.Println("receive deleteStream command")
 				}
 			}
 		} else {
@@ -177,6 +182,7 @@ func (recv *RtmpReceiver) handleConnectCommand(r amf.Reader) error {
 
 	return err
 }
+
 func (recv *RtmpReceiver) handleCreateStreamCommand(r amf.Reader) error {
 	for {
 		v, e := amf.ReadValue(r)
@@ -189,5 +195,47 @@ func (recv *RtmpReceiver) handleCreateStreamCommand(r amf.Reader) error {
 		}
 		fmt.Println("createstream value:", v)
 	}
-	return nil
+
+	w := &bytes.Buffer{}
+
+	createStreamMsg, err := NewCreateStreamSuccessMessage()
+	if err != nil {
+		return err
+	}
+	chunkArray, err := recv.sendMessageStreamSet.MessageToChunk(createStreamMsg, recv.chunkSerializer.sendChunkSize)
+	if err != nil {
+		return err
+	}
+	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	if err != nil {
+		return err
+	}
+	recv.sendMessageStreamSet.upadateLastStreamInfo(createStreamMsg, chunkArray[0].chunkStreamID)
+
+	_, err = recv.rw.Write(w.Bytes())
+
+	return err
+}
+
+func (recv *RtmpReceiver) handlePublishCommand(r amf.Reader) error {
+
+	w := &bytes.Buffer{}
+
+	publishOkMsg, err := NewPublishSuccessMessage()
+	if err != nil {
+		return err
+	}
+	chunkArray, err := recv.sendMessageStreamSet.MessageToChunk(publishOkMsg, recv.chunkSerializer.sendChunkSize)
+	if err != nil {
+		return err
+	}
+	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	if err != nil {
+		return err
+	}
+	recv.sendMessageStreamSet.upadateLastStreamInfo(publishOkMsg, chunkArray[0].chunkStreamID)
+
+	_, err = recv.rw.Write(w.Bytes())
+
+	return err
 }
