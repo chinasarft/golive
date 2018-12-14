@@ -31,7 +31,7 @@ type NetConnWrapper struct {
 
 type conn struct {
 	*NetConnWrapper
-	*RtmpReceiver
+	*RtmpHandler
 }
 
 func NewNetConnWrapper(c net.Conn, bufSize int) *NetConnWrapper {
@@ -68,7 +68,7 @@ func NewConn(netConn net.Conn, bufSize int) *conn {
 	cw := NewNetConnWrapper(netConn, bufSize)
 	c := &conn{
 		NetConnWrapper: cw,
-		RtmpReceiver:   NewRtmpReceiver(cw),
+		RtmpHandler:    NewRtmpHandler(cw),
 	}
 
 	return c

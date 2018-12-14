@@ -8,26 +8,26 @@ import (
 	"github.com/chinasarft/golive/utils/amf"
 )
 
-type RtmpReceiver struct {
-	*RtmpHandler
+type RtmpHandler struct {
+	*RtmpUnpacker
 	rw io.ReadWriter
 }
 
-func NewRtmpReceiver(rw io.ReadWriter) *RtmpReceiver {
-	recv := &RtmpReceiver{}
-	recv.RtmpHandler = NewRtmpHandler(rw, recv)
-	recv.rw = rw
-	return recv
+func NewRtmpHandler(rw io.ReadWriter) *RtmpHandler {
+	handler := &RtmpHandler{}
+	handler.RtmpUnpacker = NewRtmpUnpacker(rw, handler)
+	handler.rw = rw
+	return handler
 }
 
-func (recv *RtmpReceiver) OnError(w io.Writer) {
+func (h *RtmpHandler) OnError(w io.Writer) {
 
 }
 
-func (recv *RtmpReceiver) OnProtocolControlMessaage(m *ProtocolControlMessaage) error {
+func (h *RtmpHandler) OnProtocolControlMessaage(m *ProtocolControlMessaage) error {
 	switch m.MessageType {
 	case 1:
-		recv.chunkStreamSet.SetChunkSize(1024) // TODO 先设置成1024
+		h.chunkStreamSet.SetChunkSize(1024) // TODO 先设置成1024
 	case 2:
 	case 3:
 	case 5:
@@ -36,11 +36,11 @@ func (recv *RtmpReceiver) OnProtocolControlMessaage(m *ProtocolControlMessaage) 
 	return nil
 }
 
-func (recv *RtmpReceiver) OnUserControlMessage(m *UserControlMessage) error {
+func (h *RtmpHandler) OnUserControlMessage(m *UserControlMessage) error {
 	return nil
 }
 
-func (recv *RtmpReceiver) OnCommandMessage(m *CommandMessage) error {
+func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) error {
 	switch m.MessageType {
 	case 17: //AMF3
 	case 20: //AMF0
@@ -54,15 +54,15 @@ func (recv *RtmpReceiver) OnCommandMessage(m *CommandMessage) error {
 				//NetConnection command
 				case "connect":
 					fmt.Println("receive connect command")
-					return recv.handleConnectCommand(r)
+					return h.handleConnectCommand(r)
 				case "createStream":
 					fmt.Println("receive createStream command")
-					return recv.handleCreateStreamCommand(r)
+					return h.handleCreateStreamCommand(r)
 
 				//NetStream command
 				case "publish":
 					fmt.Println("receive publish command")
-					return recv.handlePublishCommand(r)
+					return h.handlePublishCommand(r)
 				case "deleteStream":
 					fmt.Println("receive deleteStream command")
 
@@ -82,7 +82,7 @@ func (recv *RtmpReceiver) OnCommandMessage(m *CommandMessage) error {
 	return nil
 }
 
-func (recv *RtmpReceiver) OnDataMessage(m *DataMessage) error {
+func (h *RtmpHandler) OnDataMessage(m *DataMessage) error {
 	switch m.MessageType {
 	case 15: //AFM3
 	case 18: //AFM0
@@ -90,17 +90,17 @@ func (recv *RtmpReceiver) OnDataMessage(m *DataMessage) error {
 	return nil
 }
 
-func (recv *RtmpReceiver) OnVideoMessage(m *VideoMessage) error {
+func (h *RtmpHandler) OnVideoMessage(m *VideoMessage) error {
 	fmt.Println("receive video:", m.PayloadLength, len(m.Payload))
 	return nil
 }
 
-func (recv *RtmpReceiver) OnAudioMessage(m *AudioMessage) error {
+func (h *RtmpHandler) OnAudioMessage(m *AudioMessage) error {
 	fmt.Println("receive audio:", m.PayloadLength, len(m.Payload))
 	return nil
 }
 
-func (recv *RtmpReceiver) OnSharedObjectMessage(m *SharedObjectMessage) error {
+func (h *RtmpHandler) OnSharedObjectMessage(m *SharedObjectMessage) error {
 	switch m.MessageType {
 	case 16: //AFM3
 	case 19: //AFM0
@@ -108,11 +108,11 @@ func (recv *RtmpReceiver) OnSharedObjectMessage(m *SharedObjectMessage) error {
 	return nil
 }
 
-func (recv *RtmpReceiver) OnAggregateMessage(m *AggregateMessage) error {
+func (h *RtmpHandler) OnAggregateMessage(m *AggregateMessage) error {
 	return nil
 }
 
-func (recv *RtmpReceiver) handleConnectCommand(r amf.Reader) error {
+func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 	for {
 		v, e := amf.ReadValue(r)
 		if e != nil {
@@ -132,67 +132,67 @@ func (recv *RtmpReceiver) handleConnectCommand(r amf.Reader) error {
 	w := &bytes.Buffer{}
 
 	ackMsg := NewAckMessage(2500000)
-	chunkArray, err := recv.sendMessageStreamSet.MessageToChunk(ackMsg, recv.chunkSerializer.sendChunkSize)
+	chunkArray, err := h.sendMessageStreamSet.MessageToChunk(ackMsg, h.chunkSerializer.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
-	recv.sendMessageStreamSet.upadateLastStreamInfo(ackMsg, chunkArray[0].chunkStreamID)
+	h.sendMessageStreamSet.upadateLastStreamInfo(ackMsg, chunkArray[0].chunkStreamID)
 
 	setPeerBandwidthMsg := NewSetPeerBandwidthMessage(2500000, 2)
-	chunkArray, err = recv.sendMessageStreamSet.MessageToChunk(setPeerBandwidthMsg, recv.chunkSerializer.sendChunkSize)
+	chunkArray, err = h.sendMessageStreamSet.MessageToChunk(setPeerBandwidthMsg, h.chunkSerializer.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
-	recv.sendMessageStreamSet.upadateLastStreamInfo(setPeerBandwidthMsg, chunkArray[0].chunkStreamID)
+	h.sendMessageStreamSet.upadateLastStreamInfo(setPeerBandwidthMsg, chunkArray[0].chunkStreamID)
 
-	bakChunkSize := recv.chunkSerializer.GetChunkSize()
+	bakChunkSize := h.chunkSerializer.GetChunkSize()
 	defer func() {
 		if err != nil {
-			recv.chunkSerializer.SetChunkSize(bakChunkSize)
+			h.chunkSerializer.SetChunkSize(bakChunkSize)
 		}
 	}()
 
-	recv.chunkSerializer.SetChunkSize(1024)
+	h.chunkSerializer.SetChunkSize(1024)
 
-	setChunkMsg := NewSetChunkSizeMessage(recv.chunkSerializer.GetChunkSize())
-	chunkArray, err = recv.sendMessageStreamSet.MessageToChunk(setChunkMsg, recv.chunkSerializer.sendChunkSize)
+	setChunkMsg := NewSetChunkSizeMessage(h.chunkSerializer.GetChunkSize())
+	chunkArray, err = h.sendMessageStreamSet.MessageToChunk(setChunkMsg, h.chunkSerializer.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
-	recv.sendMessageStreamSet.upadateLastStreamInfo(setChunkMsg, chunkArray[0].chunkStreamID)
+	h.sendMessageStreamSet.upadateLastStreamInfo(setChunkMsg, chunkArray[0].chunkStreamID)
 
 	connectOkMsg, err := NewConnectSuccessMessage()
 	if err != nil {
 		return err
 	}
-	chunkArray, err = recv.sendMessageStreamSet.MessageToChunk(connectOkMsg, recv.chunkSerializer.sendChunkSize)
+	chunkArray, err = h.sendMessageStreamSet.MessageToChunk(connectOkMsg, h.chunkSerializer.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
-	recv.sendMessageStreamSet.upadateLastStreamInfo(connectOkMsg, chunkArray[0].chunkStreamID)
+	h.sendMessageStreamSet.upadateLastStreamInfo(connectOkMsg, chunkArray[0].chunkStreamID)
 
-	_, err = recv.rw.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 
 	return err
 }
 
-func (recv *RtmpReceiver) handleCreateStreamCommand(r amf.Reader) error {
+func (h *RtmpHandler) handleCreateStreamCommand(r amf.Reader) error {
 	transactionId := 0
 	for {
 		v, e := amf.ReadValue(r)
@@ -217,22 +217,22 @@ func (recv *RtmpReceiver) handleCreateStreamCommand(r amf.Reader) error {
 	if err != nil {
 		return err
 	}
-	chunkArray, err := recv.sendMessageStreamSet.MessageToChunk(createStreamMsg, recv.chunkSerializer.sendChunkSize)
+	chunkArray, err := h.sendMessageStreamSet.MessageToChunk(createStreamMsg, h.chunkSerializer.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
-	recv.sendMessageStreamSet.upadateLastStreamInfo(createStreamMsg, chunkArray[0].chunkStreamID)
+	h.sendMessageStreamSet.upadateLastStreamInfo(createStreamMsg, chunkArray[0].chunkStreamID)
 
-	_, err = recv.rw.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 
 	return err
 }
 
-func (recv *RtmpReceiver) handlePublishCommand(r amf.Reader) error {
+func (h *RtmpHandler) handlePublishCommand(r amf.Reader) error {
 
 	transactionId := 0
 	for {
@@ -259,17 +259,17 @@ func (recv *RtmpReceiver) handlePublishCommand(r amf.Reader) error {
 	if err != nil {
 		return err
 	}
-	chunkArray, err := recv.sendMessageStreamSet.MessageToChunk(publishOkMsg, recv.chunkSerializer.sendChunkSize)
+	chunkArray, err := h.sendMessageStreamSet.MessageToChunk(publishOkMsg, h.chunkSerializer.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = recv.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
-	recv.sendMessageStreamSet.upadateLastStreamInfo(publishOkMsg, chunkArray[0].chunkStreamID)
+	h.sendMessageStreamSet.upadateLastStreamInfo(publishOkMsg, chunkArray[0].chunkStreamID)
 
-	_, err = recv.rw.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 
 	return err
 }

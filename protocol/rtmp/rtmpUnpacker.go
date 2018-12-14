@@ -6,10 +6,6 @@ import (
 	"log"
 )
 
-type RtmpProtocolParamGetter interface {
-	GetChunkSize(c *Chunk) uint32
-}
-
 type RtmpMessageHandler interface {
 	//OnError(w io.Writer)
 	OnProtocolControlMessaage(m *ProtocolControlMessaage) error
@@ -22,7 +18,7 @@ type RtmpMessageHandler interface {
 	OnAggregateMessage(m *AggregateMessage) error
 }
 
-type RtmpHandler struct {
+type RtmpUnpacker struct {
 	rw                   io.ReadWriter //timeout is depend on rw
 	chunkStreamSet       *ChunkStreamSet
 	messageStreamSet     *MessageStreamSet
@@ -31,10 +27,10 @@ type RtmpHandler struct {
 	chunkSerializer      *ChunkSerializer
 }
 
-func NewRtmpHandler(rw io.ReadWriter, msgHandler RtmpMessageHandler) *RtmpHandler {
+func NewRtmpUnpacker(rw io.ReadWriter, msgHandler RtmpMessageHandler) *RtmpUnpacker {
 	messageStreamSet := NewMessageStreamSet()
 
-	return &RtmpHandler{
+	return &RtmpUnpacker{
 		rw:                   rw,
 		chunkStreamSet:       NewChunkStreamSet(128),
 		messageStreamSet:     messageStreamSet,
@@ -44,7 +40,7 @@ func NewRtmpHandler(rw io.ReadWriter, msgHandler RtmpMessageHandler) *RtmpHandle
 	}
 }
 
-func (h *RtmpHandler) Start() error {
+func (h *RtmpUnpacker) Start() error {
 	err := handshake(h.rw)
 	if err != nil {
 		log.Println("rtmp HandshakeServer err:", err)

@@ -69,25 +69,25 @@ var (
 		"09"
 )
 
-type testRecv struct {
+type testHandler struct {
 	r         io.Reader
 	writeChan chan int
 	writeBuf  *bytes.Buffer
 }
 
-func newTestRecv(msg []byte) *testRecv {
-	return &testRecv{
+func newTestHandler(msg []byte) *testHandler {
+	return &testHandler{
 		r:         bytes.NewReader(msg),
 		writeBuf:  &bytes.Buffer{},
 		writeChan: make(chan int),
 	}
 }
 
-func (hs *testRecv) Read(p []byte) (n int, err error) {
+func (hs *testHandler) Read(p []byte) (n int, err error) {
 	return hs.r.Read(p)
 }
 
-func (hs *testRecv) Write(p []byte) (n int, err error) {
+func (hs *testHandler) Write(p []byte) (n int, err error) {
 	return hs.writeBuf.Write(p)
 }
 
@@ -100,13 +100,13 @@ func TestRtmpReceiver(t *testing.T) {
 		t.Errorf("hex decode msg fail:%s", err)
 	}
 
-	rw := newTestRecv(msgByte)
+	rw := newTestHandler(msgByte)
 
-	recv := NewRtmpReceiver(rw)
+	handler := NewRtmpHandler(rw)
 
-	err = recv.Start()
+	err = handler.Start()
 	if err != nil && err != io.EOF {
-		t.Fatal("recv.Start", err)
+		t.Fatal("handler.Start", err)
 	}
 
 	connectRespMsgByte := make([]byte, len(connectRespMsg)/2)
