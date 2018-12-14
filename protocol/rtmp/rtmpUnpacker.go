@@ -19,24 +19,22 @@ type RtmpMessageHandler interface {
 }
 
 type RtmpUnpacker struct {
-	rw                   io.ReadWriter //timeout is depend on rw
-	chunkStreamSet       *ChunkStreamSet
-	messageStreamSet     *MessageStreamSet
-	messageHandler       RtmpMessageHandler
-	sendMessageStreamSet *SendMessageStreamSet
-	chunkSerializer      *ChunkSerializer
+	rw               io.ReadWriter //timeout is depend on rw
+	chunkStreamSet   *ChunkStreamSet
+	messageCollector *MessageCollector
+	messageHandler   RtmpMessageHandler
+	chunkSerializer  *ChunkSerializer
 }
 
 func NewRtmpUnpacker(rw io.ReadWriter, msgHandler RtmpMessageHandler) *RtmpUnpacker {
-	messageStreamSet := NewMessageStreamSet()
+	messageStreamSet := NewMessageCollector()
 
 	return &RtmpUnpacker{
-		rw:                   rw,
-		chunkStreamSet:       NewChunkStreamSet(128),
-		messageStreamSet:     messageStreamSet,
-		messageHandler:       msgHandler,
-		chunkSerializer:      NewChunkSerializer(128),
-		sendMessageStreamSet: &SendMessageStreamSet{sendStreams: make(map[uint32]*SendMessageStream)},
+		rw:               rw,
+		chunkStreamSet:   NewChunkStreamSet(128),
+		messageCollector: messageStreamSet,
+		messageHandler:   msgHandler,
+		chunkSerializer:  NewChunkSerializer(128),
 	}
 }
 
@@ -51,8 +49,9 @@ func (h *RtmpUnpacker) Start() error {
 		if err != nil {
 			return err
 		}
+		fmt.Println("chunk timestamp:", chunk.timestamp)
 
-		msg, err := h.messageStreamSet.HandleReceiveChunk(chunk)
+		msg, err := h.messageCollector.HandleReceiveChunk(chunk)
 		if err != nil {
 			return err
 		}

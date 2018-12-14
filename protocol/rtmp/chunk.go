@@ -16,12 +16,12 @@ type ChunkBasicHeader struct {
 }
 
 type ChunkMessageHeader struct {
-	timestamp        uint32
-	messageLength    uint32
-	messageTypeID    uint8
-	isStreamIDExists bool // 表示messageStreamID是否存在，可以靠format判断，所以这里是否多余？
-	timestampExted   bool
-	messageStreamID  uint32
+	timestamp       uint32
+	messageLength   uint32
+	messageTypeID   uint8
+	timestampExted  bool   // 对于接收都没啥用，都解析成了完整的timestamp
+	timeDelta       uint32 // 对于接收可以是解析成完整的timestamp，只在发送时候使用
+	messageStreamID uint32
 }
 
 type Chunk struct {
@@ -65,10 +65,15 @@ func NewChunkStreamSet(chunkSize uint32) *ChunkStreamSet {
 	}
 }
 
+func (cbh ChunkBasicHeader) isStreamIDExists() bool {
+	return cbh.format == 0
+}
+
 func (s *ChunkStreamSet) SetChunkSize(size uint32) {
 	s.chunkSize = size
 }
 
+// chunk都带有完整的信息
 func (s *ChunkStreamSet) ReadChunk(r io.Reader) (*Chunk, error) {
 
 	chunkBasicHdr, err := getChunkBasicHeader(r)
@@ -91,18 +96,32 @@ func (s *ChunkStreamSet) ReadChunk(r io.Reader) (*Chunk, error) {
 	if cs.remain == 0 {
 		switch chunkBasicHdr.format {
 		case 0:
+			cs.remain = chunkMessageHdr.messageLength
 			cs.ChunkBasicHeader = *chunkBasicHdr
 			cs.ChunkMessageHeader = *chunkMessageHdr
-			fallthrough
 		case 1:
 			cs.remain = chunkMessageHdr.messageLength
+			cs.messageLength = chunkMessageHdr.messageLength
+			cs.messageTypeID = chunkMessageHdr.messageTypeID
+			chunkMessageHdr.timestamp += cs.timestamp
+			cs.timestamp = chunkMessageHdr.timestamp
+			chunkMessageHdr.messageStreamID = cs.messageStreamID
 		case 2:
-			fallthrough
+			cs.remain = cs.messageLength
+			chunkMessageHdr.timestamp += cs.timestamp
+			cs.timestamp = chunkMessageHdr.timestamp
+			chunkMessageHdr.messageLength = cs.messageLength
+			chunkMessageHdr.messageTypeID = cs.messageTypeID
+			chunkMessageHdr.messageStreamID = cs.messageStreamID
 		case 3:
 			cs.remain = cs.messageLength
+			chunkMessageHdr.timestamp = cs.timestamp
+			chunkMessageHdr.messageLength = cs.messageLength
+			chunkMessageHdr.messageTypeID = cs.messageTypeID
+			chunkMessageHdr.messageStreamID = cs.messageStreamID
 		}
 	}
-	if !chunkMessageHdr.isStreamIDExists {
+	if !chunkBasicHdr.isStreamIDExists() {
 		chunkMessageHdr.messageStreamID = cs.messageStreamID
 	}
 
@@ -238,7 +257,6 @@ func readChunkMessageHeaderType0(r io.Reader) (*ChunkMessageHeader, error) {
 	messageTypeID, _ := byteio.ReadUint8(bio)
 	chunk.messageTypeID = uint8(messageTypeID)
 	chunk.messageStreamID, _ = byteio.ReadUint32LE(bio)
-	chunk.isStreamIDExists = true
 
 	chunk.timestampExted = false
 	if chunk.timestamp == 0xffffff {
@@ -371,7 +389,7 @@ func serializerChunkDeltaTime(w *bytes.Buffer, deltaTime uint32) {
 }
 
 func serializerChunkMessageHeaderNoStreamID(msgHdr *ChunkMessageHeader, w *bytes.Buffer) {
-	byteio.WriteU24BE(w, msgHdr.timestamp)
+	byteio.WriteU24BE(w, msgHdr.timeDelta)
 	byteio.WriteU24BE(w, msgHdr.messageLength)
 	w.WriteByte(msgHdr.messageTypeID)
 }
@@ -379,7 +397,7 @@ func serializerChunkMessageHeaderNoStreamID(msgHdr *ChunkMessageHeader, w *bytes
 func serializerChunkMessageHeaderType1(msgHdr *ChunkMessageHeader, w *bytes.Buffer) {
 	serializerChunkMessageHeaderNoStreamID(msgHdr, w)
 	if msgHdr.timestamp > 0xffffff {
-		byteio.WriteU32BE(w, msgHdr.timestamp)
+		byteio.WriteU32BE(w, msgHdr.timeDelta)
 	}
 }
 
@@ -418,6 +436,7 @@ func (c *Chunk) serializerType3(w *bytes.Buffer) error {
 	return nil
 }
 
+// 送入的chunk.timestamp都是type0的timestamp，需要自己判断
 func (s *ChunkSerializer) SerializerChunk(chunkArray []*Chunk, w *bytes.Buffer) (err error) {
 
 	for _, chunk := range chunkArray {
@@ -431,6 +450,9 @@ func (s *ChunkSerializer) SerializerChunk(chunkArray []*Chunk, w *bytes.Buffer) 
 			cs = &ChunkStream{}
 			s.sendStreams[chunk.chunkStreamID] = cs
 			cs.ChunkStreamID = chunk.chunkStreamID
+			if cs.format != 0 {
+				panic("chunkSerializer first chunk fmt not 0")
+			}
 		}
 
 		isProtoCtrlMsg := false
@@ -448,20 +470,24 @@ func (s *ChunkSerializer) SerializerChunk(chunkArray []*Chunk, w *bytes.Buffer) 
 			if cs.messageStreamID != chunk.messageStreamID {
 				panic("msid should equal")
 			}
+			timeDelta := chunk.timestamp - cs.timestamp
 			if cs.messageLength == chunk.messageLength && cs.messageTypeID == chunk.messageTypeID {
-				if cs.timestamp == chunk.timestamp {
+
+				if cs.timestamp == chunk.timestamp || cs.timeDelta == timeDelta {
 					chunk.serializerType3(w)
 					cs.format = 3
 				} else {
-					deltaTime := chunk.timestamp - cs.timestamp
-					chunk.serializerType2(w, deltaTime)
+					cs.timeDelta = timeDelta
+					chunk.timeDelta = timeDelta
+					chunk.serializerType2(w, cs.timeDelta)
 					cs.format = 2
 					cs.timestamp = chunk.timestamp
 				}
 
 			} else {
-				deltaTime := chunk.timestamp - cs.timestamp
-				chunk.serializerType1(w, deltaTime)
+				cs.timeDelta = timeDelta
+				chunk.timeDelta = timeDelta
+				chunk.serializerType1(w, cs.timeDelta)
 				cs.format = 1
 				cs.timestamp = chunk.timestamp
 				cs.messageLength = chunk.messageLength
