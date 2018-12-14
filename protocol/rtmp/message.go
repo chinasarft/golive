@@ -265,7 +265,7 @@ func NewConnectSuccessMessage() (*Message, error) {
 
 	var values []interface{}
 	values = append(values, "_result")
-	values = append(values, 1)
+	values = append(values, 1) // 7.2.1.1 transactionid Always set to 1
 
 	obj1 := []interface{}{
 		"fmsVer", "FMS/3,0,1,123",
@@ -290,7 +290,7 @@ func NewConnectSuccessMessage() (*Message, error) {
 	return message, nil
 }
 
-func NewCreateStreamSuccessMessage() (*Message, error) {
+func NewCreateStreamSuccessMessage(transactionId int) (*Message, error) {
 	message := &Message{
 		MessageType:   0x14,
 		PayloadLength: 4,
@@ -300,9 +300,9 @@ func NewCreateStreamSuccessMessage() (*Message, error) {
 
 	var values []interface{}
 	values = append(values, "_result")
-	values = append(values, 4)
+	values = append(values, transactionId)
 	values = append(values, nil)
-	values = append(values, 1)
+	values = append(values, 1) //1 streamID, TODO 表示之后发送的用户控制消息的streamID么？
 
 	data, err := amf.WriteArrayAsSiblingButElemArrayAsArray(values)
 	if err != nil {
@@ -324,7 +324,7 @@ func NewPublishSuccessMessage() (*Message, error) {
 
 	var values []interface{}
 	values = append(values, "onStatus")
-	values = append(values, 0)
+	values = append(values, 0) //7.2.2 transactionid 必须设置为0
 	values = append(values, nil)
 
 	obj1 := []interface{}{

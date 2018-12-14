@@ -51,23 +51,28 @@ func (recv *RtmpReceiver) OnCommandMessage(m *CommandMessage) error {
 			case string:
 				value := v.(string)
 				switch value {
+				//NetConnection command
 				case "connect":
 					fmt.Println("receive connect command")
 					return recv.handleConnectCommand(r)
+				case "createStream":
+					fmt.Println("receive createStream command")
+					return recv.handleCreateStreamCommand(r)
+
+				//NetStream command
+				case "publish":
+					fmt.Println("receive publish command")
+					return recv.handlePublishCommand(r)
+				case "deleteStream":
+					fmt.Println("receive deleteStream command")
+
+				// TODO 以下命令文档里都没有找到
 				case "releaseStream":
 					fmt.Println("receive releaseStream command")
 				case "FCPublish":
 					fmt.Println("receive FCPublish command")
-				case "createStream":
-					fmt.Println("receive createStream command")
-					return recv.handleCreateStreamCommand(r)
-				case "publish":
-					fmt.Println("receive publish command")
-					return recv.handlePublishCommand(r)
 				case "FCUnpublish":
 					fmt.Println("receive FCUnpublish command")
-				case "deleteStream":
-					fmt.Println("receive deleteStream command")
 				}
 			}
 		} else {
@@ -117,7 +122,11 @@ func (recv *RtmpReceiver) handleConnectCommand(r amf.Reader) error {
 			fmt.Println("handleconnect--->", e)
 			return e
 		}
-		fmt.Println("handleconnect value:", v)
+		if transactionId, ok := v.(float64); ok {
+			fmt.Println("handleconnect transactionId:", int(transactionId)) //7.2.11 always set to 1
+		} else {
+			fmt.Println("handleconnect value:", v)
+		}
 	}
 
 	w := &bytes.Buffer{}
@@ -184,6 +193,7 @@ func (recv *RtmpReceiver) handleConnectCommand(r amf.Reader) error {
 }
 
 func (recv *RtmpReceiver) handleCreateStreamCommand(r amf.Reader) error {
+	transactionId := 0
 	for {
 		v, e := amf.ReadValue(r)
 		if e != nil {
@@ -193,12 +203,17 @@ func (recv *RtmpReceiver) handleCreateStreamCommand(r amf.Reader) error {
 			fmt.Println("create stream--->", e)
 			return e
 		}
-		fmt.Println("createstream value:", v)
+		if transId, ok := v.(float64); ok {
+			transactionId = int(transId)
+			fmt.Println("createstream transactionId:", transactionId)
+		} else {
+			fmt.Println("createstream value:", v)
+		}
 	}
 
 	w := &bytes.Buffer{}
 
-	createStreamMsg, err := NewCreateStreamSuccessMessage()
+	createStreamMsg, err := NewCreateStreamSuccessMessage(transactionId)
 	if err != nil {
 		return err
 	}
@@ -219,8 +234,27 @@ func (recv *RtmpReceiver) handleCreateStreamCommand(r amf.Reader) error {
 
 func (recv *RtmpReceiver) handlePublishCommand(r amf.Reader) error {
 
+	transactionId := 0
+	for {
+		v, e := amf.ReadValue(r)
+		if e != nil {
+			if e == io.EOF {
+				break
+			}
+			fmt.Println("publish stream--->", e)
+			return e
+		}
+		if transId, ok := v.(float64); ok {
+			transactionId = int(transId)
+			fmt.Println("publish transactionId:", transactionId)
+		} else {
+			fmt.Println("publish value:", v)
+		}
+	}
+
 	w := &bytes.Buffer{}
 
+	// NetConnection 需要回复transactionid, netstream tid都设置为0 7.2.2
 	publishOkMsg, err := NewPublishSuccessMessage()
 	if err != nil {
 		return err
