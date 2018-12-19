@@ -1,13 +1,14 @@
 package rtmp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 )
 
 type RtmpMessageHandler interface {
-	//OnError(w io.Writer)
+	OnError()
 	OnProtocolControlMessaage(m *ProtocolControlMessaage) error
 	OnUserControlMessage(m *UserControlMessage) error
 	OnCommandMessage(m *CommandMessage) error
@@ -38,21 +39,28 @@ func NewRtmpUnpacker(rw io.ReadWriter, msgHandler RtmpMessageHandler) *RtmpUnpac
 	}
 }
 
-func (h *RtmpUnpacker) Start() error {
+func (h *RtmpUnpacker) Start(ctx context.Context) error {
 	err := handshake(h.rw)
 	if err != nil {
 		log.Println("rtmp HandshakeServer err:", err)
 		return err
 	}
 	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 		chunk, err := h.chunkStreamSet.ReadChunk(h.rw)
 		if err != nil {
+			h.messageHandler.OnError()
 			return err
 		}
 		log.Println("chunk timestamp:", chunk.timestamp)
 
 		msg, err := h.messageCollector.HandleReceiveChunk(chunk)
 		if err != nil {
+			h.messageHandler.OnError()
 			return err
 		}
 
@@ -60,18 +68,22 @@ func (h *RtmpUnpacker) Start() error {
 			switch msg.MessageType {
 			case 1, 2, 3, 5, 6:
 				if chunk.chunkStreamID != 2 {
-					return fmt.Errorf("csid:%d for proto ctrl msg", chunk.chunkStreamID)
+					err = fmt.Errorf("csid:%d for proto ctrl msg", chunk.chunkStreamID)
+					break
 				}
 				if msg.StreamID != 0 {
-					return fmt.Errorf("msid:%d for proto ctrl msg", msg.StreamID)
+					err = fmt.Errorf("msid:%d for proto ctrl msg", msg.StreamID)
+					break
 				}
 				err = h.messageHandler.OnProtocolControlMessaage((*ProtocolControlMessaage)(msg))
 			case 4:
 				if chunk.chunkStreamID != 2 {
-					return fmt.Errorf("csid:%d for user ctrl msg", chunk.chunkStreamID)
+					err = fmt.Errorf("csid:%d for user ctrl msg", chunk.chunkStreamID)
+					break
 				}
 				if msg.StreamID != 0 {
-					return fmt.Errorf("msid:%d for user ctrl msg", msg.StreamID)
+					err = fmt.Errorf("msid:%d for user ctrl msg", msg.StreamID)
+					break
 				}
 				err = h.messageHandler.OnUserControlMessage((*UserControlMessage)(msg))
 			case 8:
@@ -82,13 +94,18 @@ func (h *RtmpUnpacker) Start() error {
 				err = h.messageHandler.OnDataMessage((*DataMessage)(msg))
 			case 17, 20:
 				if chunk.chunkStreamID < 3 {
-					return fmt.Errorf("csid:%d for cmd msg", chunk.chunkStreamID)
+					err = fmt.Errorf("csid:%d for cmd msg", chunk.chunkStreamID)
+					break
 				}
 				err = h.messageHandler.OnCommandMessage((*CommandMessage)(msg))
 			case 16, 19:
 				err = h.messageHandler.OnSharedObjectMessage((*SharedObjectMessage)(msg))
 			case 22:
 				err = h.messageHandler.OnAggregateMessage((*AggregateMessage)(msg))
+			}
+			if err != nil {
+				h.messageHandler.OnError()
+				return err
 			}
 		}
 	}

@@ -1,6 +1,7 @@
 package rtmp
 
 import (
+	"context"
 	"fmt"
 	"log"
 )
@@ -11,6 +12,8 @@ const (
 	cmd_register_source = iota
 	cmd_register_sink
 	cmd_rtmp_message
+	cmd_unregister_source
+	cmd_unregister_sink
 )
 
 type PadMessage struct {
@@ -60,6 +63,7 @@ func RegisterSource(h *RtmpHandler) (output PutAvMessage, err error) {
 		cmd: cmd_register_source,
 		msg: src,
 	}
+
 	// 同步返回结果
 	err = <-src.result
 	output = func(m *Message) error {
@@ -73,6 +77,15 @@ func RegisterSource(h *RtmpHandler) (output PutAvMessage, err error) {
 			return fmt.Errorf("chan is full. drop this msg")
 		}
 		return nil
+	}
+	return
+}
+
+func UnregisterSource(h *RtmpHandler) {
+
+	pads.pipe <- &PadMessage{
+		cmd: cmd_unregister_source,
+		msg: h,
 	}
 	return
 }
@@ -94,6 +107,14 @@ func RegisterSink(h *RtmpHandler) (err error) {
 	return
 }
 
+func UnegisterSink(h *RtmpHandler) {
+	pads.pipe <- &PadMessage{
+		cmd: cmd_unregister_sink,
+		msg: h,
+	}
+	return
+}
+
 func (p *PadPool) pairPad() {
 	for {
 		var msg *PadMessage
@@ -104,8 +125,12 @@ func (p *PadPool) pairPad() {
 		switch msg.cmd {
 		case cmd_register_source:
 			p.handleRegisterSource(msg)
+		case cmd_unregister_source:
+			p.handleUnregisterSource(msg)
 		case cmd_register_sink:
 			p.handleRegisterSink(msg)
+		case cmd_unregister_sink:
+			p.handleUnregisterSink(msg)
 		}
 	}
 }
@@ -118,9 +143,9 @@ func (p *PadPool) handleRegisterSource(msg *PadMessage) {
 	}
 
 	key := src.appStreamKey
-	log.Println("handleRegisterSource:", key)
 
 	_, ok = p.receivers[key]
+	log.Println("handleRegisterSource:", key, ok)
 	if ok {
 		// TODO 存在是否抢流等？
 		src.result <- fmt.Errorf("is already exits")
@@ -131,15 +156,34 @@ func (p *PadPool) handleRegisterSource(msg *PadMessage) {
 	}
 }
 
+func (p *PadPool) handleUnregisterSource(msg *PadMessage) {
+
+	h, ok := msg.msg.(*RtmpHandler)
+	if !ok {
+		panic("handleUnegisterSource wrong type")
+	}
+
+	key := h.appStreamKey
+
+	_, ok = p.receivers[key]
+	log.Println("handleUnregisterSource:", key, ok)
+	if ok {
+		h.Cancel()
+		delete(p.receivers, key)
+	} else {
+		panic(key + " source not registerd")
+	}
+}
+
 func (p *PadPool) handleRegisterSink(msg *PadMessage) {
 	sink, ok := msg.msg.(*Sink)
 	if !ok {
 		panic("handleRegisterSource wrong type")
 	}
 	key := sink.appStreamKey
-	log.Println("handleRegisterSink:", key)
 
 	src, ok := p.receivers[key]
+	log.Println("handleRegisterSink:", key, ok)
 	if !ok {
 		// TODO 推流还不存在，等待？
 		sink.result <- fmt.Errorf(key, "%s not exits", key)
@@ -150,10 +194,32 @@ func (p *PadPool) handleRegisterSink(msg *PadMessage) {
 	}
 }
 
+func (p *PadPool) handleUnregisterSink(msg *PadMessage) {
+	h, ok := msg.msg.(*RtmpHandler)
+	if !ok {
+		panic("handleRegisterSource wrong type")
+	}
+	key := h.appStreamKey
+
+	src, ok := p.receivers[key]
+	log.Println("handleUnregisterSink:", key, ok)
+	if !ok {
+		// 情况1:play时候还没有source, 目前play不存在source返回错误,不可能
+		// 情况2:unregsrc和unregsink几乎同时，先unregsrc，的却可能出现这种情况
+		log.Println(key + "source not registered(from sink)")
+	} else {
+		src.srcChan <- msg
+	}
+}
+
 func (s *Source) work() {
+	ctx, _ := context.WithCancel(s.ctx)
 	for {
 		var msg *PadMessage
 		select {
+		case <-ctx.Done():
+			s.cancelSink()
+			return
 		case msg = <-s.srcChan:
 		}
 
@@ -167,13 +233,18 @@ func (s *Source) work() {
 			}
 			log.Println("srcwork:", rtmpMsg.Timestamp)
 			s.writeMessage(rtmpMsg)
+		case cmd_unregister_sink:
+			s.deleteSink(msg)
 		}
 	}
 }
 
 func (sink *Sink) work() {
+	ctx, _ := context.WithCancel(sink.ctx)
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case m := <-sink.rtmpMsgChan:
 			log.Println("=======>receive message")
 			sink.writeMessage(m)
@@ -184,7 +255,7 @@ func (sink *Sink) work() {
 func (src *Source) connectSink(msg *PadMessage) {
 	log.Println("src connectSink")
 	sink := msg.msg.(*Sink)
-	sink.keyInSrc = sink.appStreamKey + fmt.Sprintf("%p", sink)
+	sink.keyInSrc = sink.appStreamKey + fmt.Sprintf("%p", sink.RtmpHandler)
 
 	if _, ok := src.sinks[sink.keyInSrc]; !ok {
 		src.sinks[sink.keyInSrc] = sink
@@ -218,6 +289,23 @@ func (src *Source) connectSink(msg *PadMessage) {
 	sink.rtmpMsgChan <- amsg
 }
 
+func (src *Source) deleteSink(msg *PadMessage) {
+
+	h := msg.msg.(*RtmpHandler)
+	keyInSrc := h.appStreamKey + fmt.Sprintf("%p", h)
+
+	sink, ok := src.sinks[keyInSrc]
+	log.Println("src deleteSink", keyInSrc, ok)
+	if !ok {
+		// 还是有可能的，如果几乎同时关闭，先unregisterSource
+		// 在unregisterSink,就会出现
+		log.Panicln(keyInSrc + " not conntecd to source")
+	} else {
+		delete(src.sinks, keyInSrc)
+		sink.Cancel()
+	}
+}
+
 func (src *Source) writeMessage(m *Message) {
 	for _, sink := range src.sinks {
 		m.StreamID = sink.functionalStreamId
@@ -225,5 +313,11 @@ func (src *Source) writeMessage(m *Message) {
 		if err != nil {
 			delete(src.sinks, sink.keyInSrc)
 		}
+	}
+}
+
+func (src *Source) cancelSink() {
+	for _, sink := range src.sinks {
+		sink.Cancel()
 	}
 }

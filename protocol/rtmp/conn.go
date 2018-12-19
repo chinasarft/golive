@@ -2,6 +2,7 @@ package rtmp
 
 import (
 	"bufio"
+	"context"
 	"log"
 	"net"
 	"time"
@@ -75,7 +76,8 @@ func NewConn(netConn net.Conn, bufSize int) *conn {
 }
 
 func (c *conn) serve() {
-	err := c.Start()
+	c.ctx, c.cancel = context.WithCancel(context.Background())
+	err := c.Start(c.ctx)
 	if err != nil {
 		c.NetConnWrapper.Close()
 		log.Println("rtmp HandshakeServer err:", err)

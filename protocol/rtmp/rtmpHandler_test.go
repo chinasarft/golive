@@ -2,6 +2,7 @@ package rtmp
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"io"
 	"testing"
@@ -91,6 +92,10 @@ func (hs *testHandler) Write(p []byte) (n int, err error) {
 	return hs.writeBuf.Write(p)
 }
 
+func (hs *testHandler) Close() error {
+	return nil
+}
+
 func TestRtmpReceiver(t *testing.T) {
 	msg := testc0c1c2 + connectMsg + setChunkSizeMsg + releaseStreamMsg + fcPublishMsg + createStreamMsg +
 		publishMsg + setDataFrameMsg + audioMsg1 + audioMsg2 + audioMsg3 + audioMsg4
@@ -100,11 +105,12 @@ func TestRtmpReceiver(t *testing.T) {
 		t.Errorf("hex decode msg fail:%s", err)
 	}
 
-	rw := newTestHandler(msgByte)
+	rwc := newTestHandler(msgByte)
 
-	handler := NewRtmpHandler(rw)
+	handler := NewRtmpHandler(rwc)
 
-	err = handler.Start()
+	handler.ctx, handler.cancel = context.WithCancel(context.Background())
+	err = handler.Start(handler.ctx)
 	if err != nil && err != io.EOF {
 		t.Fatal("handler.Start", err)
 	}
@@ -116,7 +122,7 @@ func TestRtmpReceiver(t *testing.T) {
 	}
 
 	offset := 1 + 1536 + 1536 // 1 for s0, 1536 s1 s2
-	allresp := rw.writeBuf.Bytes()
+	allresp := rwc.writeBuf.Bytes()
 	realConnectResp := allresp[offset : offset+len(connectRespMsgByte)]
 
 	if bytes.Compare(connectRespMsgByte, realConnectResp) != 0 {

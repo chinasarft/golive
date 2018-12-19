@@ -2,6 +2,7 @@ package rtmp
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -24,7 +25,7 @@ type PlayCmdParam struct {
 
 type RtmpHandler struct {
 	*RtmpUnpacker
-	rw io.ReadWriter
+	rwc io.ReadWriteCloser
 
 	connetCmdObj  map[string]interface{}
 	publishCmdObj ConnectCmdParam
@@ -38,17 +39,31 @@ type RtmpHandler struct {
 	                                      目前的实现是，该streamid作为user control message的消息msid
 		 	 	 	 	 	 	 	 	 	 并且该streamid的值为play这个消息的msid */
 	putMsg PutAvMessage
+	ctx    context.Context
+	cancel context.CancelFunc
+	role   string
 }
 
-func NewRtmpHandler(rw io.ReadWriter) *RtmpHandler {
+func NewRtmpHandler(rwc io.ReadWriteCloser) *RtmpHandler {
 	handler := &RtmpHandler{}
-	handler.RtmpUnpacker = NewRtmpUnpacker(rw, handler)
-	handler.rw = rw
+	handler.RtmpUnpacker = NewRtmpUnpacker(rwc, handler)
+	handler.rwc = rwc
 	return handler
 }
 
-func (h *RtmpHandler) OnError(w io.Writer) {
+func (h *RtmpHandler) OnError() {
+	if h.role == "source" {
+		UnregisterSource(h)
+	} else if h.role == "sink" {
+		UnegisterSink(h)
+	} else {
+		h.Cancel()
+	}
+}
 
+func (h *RtmpHandler) Cancel() {
+	h.cancel()
+	h.rwc.Close()
 }
 
 func (h *RtmpHandler) OnProtocolControlMessaage(m *ProtocolControlMessaage) error {
@@ -110,6 +125,9 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 					err = h.handlePublishCommand(r)
 					if err == nil {
 						h.putMsg, err = RegisterSource(h)
+						if err == nil {
+							h.role = "source"
+						}
 					}
 					return
 				case "deleteStream":
@@ -119,6 +137,9 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 					err = h.handlePlayCommand(r, m)
 					if err == nil {
 						err = RegisterSink(h)
+						if err == nil {
+							h.role = "sink"
+						}
 					}
 					return
 
@@ -321,7 +342,7 @@ func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 		return err
 	}
 
-	_, err = h.rw.Write(w.Bytes())
+	_, err = h.rwc.Write(w.Bytes())
 
 	return err
 }
@@ -360,7 +381,7 @@ func (h *RtmpHandler) handleCreateStreamCommand(r amf.Reader) error {
 		return err
 	}
 
-	_, err = h.rw.Write(w.Bytes())
+	_, err = h.rwc.Write(w.Bytes())
 
 	return err
 }
@@ -478,7 +499,7 @@ func (h *RtmpHandler) handlePublishCommand(r amf.Reader) error {
 		return err
 	}
 
-	_, err = h.rw.Write(w.Bytes())
+	_, err = h.rwc.Write(w.Bytes())
 
 	return err
 }
@@ -624,7 +645,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 		return err
 	}
 
-	_, err = h.rw.Write(w.Bytes())
+	_, err = h.rwc.Write(w.Bytes())
 	if err != nil {
 		return err
 	}
@@ -640,7 +661,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 		return err
 	}
 
-	_, err = h.rw.Write(w.Bytes())
+	_, err = h.rwc.Write(w.Bytes())
 	if err != nil {
 		return err
 	}
@@ -656,7 +677,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 		return err
 	}
 
-	_, err = h.rw.Write(w.Bytes())
+	_, err = h.rwc.Write(w.Bytes())
 	if err != nil {
 		return err
 	}
@@ -672,7 +693,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 		return err
 	}
 
-	_, err = h.rw.Write(w.Bytes())
+	_, err = h.rwc.Write(w.Bytes())
 	if err != nil {
 		return err
 	}
@@ -693,7 +714,7 @@ func (h *RtmpHandler) writeMessage(m *Message) error {
 		return err
 	}
 
-	_, err = h.rw.Write(w.Bytes())
+	_, err = h.rwc.Write(w.Bytes())
 	if err != nil {
 		return err
 	}
