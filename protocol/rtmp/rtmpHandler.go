@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"reflect"
 
 	"github.com/chinasarft/golive/utils/amf"
@@ -66,19 +67,19 @@ func (h *RtmpHandler) OnUserControlMessage(m *UserControlMessage) error {
 	eventType := int(m.Payload[0])*256 + int(m.Payload[1])
 	switch eventType {
 	case 0: // StreamBegin
-		fmt.Println("OnUserControlMessage:StreamBegin")
+		log.Println("OnUserControlMessage:StreamBegin")
 	case 1: // StreamEOF
-		fmt.Println("OnUserControlMessage:StreamEOF")
+		log.Println("OnUserControlMessage:StreamEOF")
 	case 2: // StreamDry
-		fmt.Println("OnUserControlMessage:StreamDry")
+		log.Println("OnUserControlMessage:StreamDry")
 	case 3: // SetBufferLength
-		fmt.Println("OnUserControlMessage:SetBufferLength")
+		log.Println("OnUserControlMessage:SetBufferLength")
 	case 4: // StreamIsRecorded
-		fmt.Println("OnUserControlMessage:StreamIsRecorded")
+		log.Println("OnUserControlMessage:StreamIsRecorded")
 	case 6: // PingRequest
-		fmt.Println("OnUserControlMessage:PingRequest")
+		log.Println("OnUserControlMessage:PingRequest")
 	case 7: // PingResponse
-		fmt.Println("OnUserControlMessage:PingResponse")
+		log.Println("OnUserControlMessage:PingResponse")
 	}
 	return nil
 }
@@ -96,25 +97,25 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 				switch value {
 				//NetConnection command
 				case "connect":
-					fmt.Println("receive connect command")
+					log.Println("receive connect command")
 					return h.handleConnectCommand(r)
 				case "createStream":
-					fmt.Println("receive createStream command")
+					log.Println("receive createStream command")
 					err = h.handleCreateStreamCommand(r)
 					return
 
 				//NetStream command
 				case "publish":
-					fmt.Println("receive publish command")
+					log.Println("receive publish command")
 					err = h.handlePublishCommand(r)
 					if err == nil {
 						h.putMsg, err = RegisterSource(h)
 					}
 					return
 				case "deleteStream":
-					fmt.Println("receive deleteStream command")
+					log.Println("receive deleteStream command")
 				case "play":
-					fmt.Println("receive play command")
+					log.Println("receive play command")
 					err = h.handlePlayCommand(r, m)
 					if err == nil {
 						err = RegisterSink(h)
@@ -123,11 +124,11 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 
 				// TODO 以下命令文档里都没有找到
 				case "releaseStream":
-					fmt.Println("receive releaseStream command")
+					log.Println("receive releaseStream command")
 				case "FCPublish":
-					fmt.Println("receive FCPublish command")
+					log.Println("receive FCPublish command")
 				case "FCUnpublish":
-					fmt.Println("receive FCUnpublish command")
+					log.Println("receive FCUnpublish command")
 				}
 			}
 		} else {
@@ -149,7 +150,7 @@ func (h *RtmpHandler) OnDataMessage(m *DataMessage) error {
 				value := v.(string)
 				switch value {
 				case "@setDataFrame":
-					fmt.Println("@setDataFrame")
+					log.Println("@setDataFrame")
 					// @setDataFrame固定长度是16字节
 					h.avMetaData = m.Payload[16:]
 					break
@@ -166,10 +167,10 @@ func (h *RtmpHandler) OnVideoMessage(m *VideoMessage) error {
 	// isAVCCodec := (m.Payload[0] | 0x0F) == 7
 	// if m.Payload[1] == 0 && isKeyFrame && isAVCCodec {
 	if h.AVCDecoderConfigurationRecord == nil && m.Payload[0] == 0x17 {
-		fmt.Println("receive metavideo and put:", len(m.Payload), m.Payload[0])
+		log.Println("receive metavideo and put:", len(m.Payload), m.Payload[0])
 		h.AVCDecoderConfigurationRecord = m.Payload
 	} else {
-		fmt.Println("receive video and put:", len(m.Payload), m.Payload[0], m.Timestamp)
+		log.Println("receive video and put:", len(m.Payload), m.Payload[0], m.Timestamp)
 		h.putMsg((*Message)(m))
 	}
 
@@ -181,7 +182,7 @@ func (h *RtmpHandler) OnAudioMessage(m *AudioMessage) error {
 	if m.Payload[1] == 0 {
 		h.AACSequenceHeader = m.Payload
 	} else {
-		fmt.Println("receive audio and put:", len(m.Payload), m.Timestamp)
+		log.Println("receive audio and put:", len(m.Payload), m.Timestamp)
 		h.putMsg((*Message)(m))
 	}
 	return nil
@@ -251,7 +252,7 @@ func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 		switch i {
 		case 0:
 			if transactionId, ok := v.(float64); ok {
-				fmt.Println("handleconnect transactionId:", int(transactionId)) //7.2.11 always set to 1
+				log.Println("handleconnect transactionId:", int(transactionId)) //7.2.11 always set to 1
 			} else {
 				panic("transactionId not number")
 			}
@@ -259,7 +260,7 @@ func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 			if cmdObj, ok := v.(amf.Object); ok {
 				h.connetCmdObj = cmdObj
 			} else {
-				fmt.Println("-------=>", v, reflect.TypeOf(v))
+				log.Println("-------=>", v, reflect.TypeOf(v))
 				panic("cmd object not map")
 			}
 		}
@@ -333,14 +334,14 @@ func (h *RtmpHandler) handleCreateStreamCommand(r amf.Reader) error {
 			if e == io.EOF {
 				break
 			}
-			fmt.Println("create stream--->", e)
+			log.Println("create stream--->", e)
 			return e
 		}
 		if transId, ok := v.(float64); ok {
 			transactionId = int(transId)
-			fmt.Println("createstream transactionId:", transactionId)
+			log.Println("createstream transactionId:", transactionId)
 		} else {
-			fmt.Println("createstream value:", v)
+			log.Println("createstream value:", v)
 		}
 	}
 
@@ -440,7 +441,7 @@ func (h *RtmpHandler) handlePublishCommand(r amf.Reader) error {
 		case 0:
 			if transId, ok := v.(float64); ok {
 				transactionId = int(transId)
-				fmt.Println("publish transactionId:", transactionId) //7.2.11 always set to 1
+				log.Println("publish transactionId:", transactionId) //7.2.11 always set to 1
 			} else {
 				panic("transactionId not number")
 			}
@@ -568,14 +569,14 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 			if e == io.EOF {
 				break
 			}
-			fmt.Println("play--->", e)
+			log.Println("play--->", e)
 			return e
 		}
 		switch i {
 		case 0:
 			if transId, ok := v.(float64); ok {
 				transactionId = int(transId)
-				fmt.Println("publish transactionId:", transactionId) //7.2.11 always set to 1
+				log.Println("publish transactionId:", transactionId) //7.2.11 always set to 1
 			} else {
 				panic("transactionId not number")
 			}
@@ -719,7 +720,6 @@ func (s *RtmpHandler) MessageToChunk(m *Message, chunkSize uint32) ([]*Chunk, er
 	case 4:
 		csid = 8
 	}
-	fmt.Println("message.go:175", csid)
 
 	chunkArray, err := m.ToType0Chunk(uint32(csid), chunkSize)
 

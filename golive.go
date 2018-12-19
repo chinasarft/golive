@@ -1,15 +1,16 @@
 package main
 
 import (
-	"fmt"
+	"log"
 
 	"github.com/chinasarft/golive/protocol/rtmp"
 )
 
 func main() {
-	fmt.Println("rtmp server starting...")
+	log.SetFlags(log.Ldate | log.Lmicroseconds | log.Lshortfile)
+	log.Println("rtmp server starting...")
 	err := rtmp.ListenAndServe("", nil)
 	if err != nil {
-		fmt.Println("fail to start rtmp:", err)
+		log.Println("fail to start rtmp:", err)
 	}
 }

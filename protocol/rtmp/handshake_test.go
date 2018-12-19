@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"testing"
 )
 
@@ -309,7 +310,7 @@ func TestCheckC1(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	} else {
-		fmt.Println("schema0 success")
+		log.Println("schema0 success")
 	}
 
 	err = checkC1(t, schema1c1)
@@ -331,7 +332,7 @@ func TestHandshake(t *testing.T) {
 	if err != nil {
 		t.Errorf("check C1 digest fail:")
 	} else {
-		fmt.Println("handshake ok")
+		log.Println("handshake ok")
 	}
 	return
 }

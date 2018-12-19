@@ -2,6 +2,7 @@ package rtmp
 
 import (
 	"fmt"
+	"log"
 )
 
 type PutAvMessage func(m *Message) error
@@ -67,7 +68,7 @@ func RegisterSource(h *RtmpHandler) (output PutAvMessage, err error) {
 			cmd: cmd_rtmp_message,
 			msg: m,
 		}:
-			fmt.Println("--------->put message")
+			log.Println("--------->put message")
 		default:
 			return fmt.Errorf("chan is full. drop this msg")
 		}
@@ -99,7 +100,7 @@ func (p *PadPool) pairPad() {
 		select {
 		case msg = <-p.pipe:
 		}
-		fmt.Println("pair")
+		log.Println("pair")
 		switch msg.cmd {
 		case cmd_register_source:
 			p.handleRegisterSource(msg)
@@ -117,7 +118,7 @@ func (p *PadPool) handleRegisterSource(msg *PadMessage) {
 	}
 
 	key := src.appStreamKey
-	fmt.Println("handleRegisterSource:", key)
+	log.Println("handleRegisterSource:", key)
 
 	_, ok = p.receivers[key]
 	if ok {
@@ -136,7 +137,7 @@ func (p *PadPool) handleRegisterSink(msg *PadMessage) {
 		panic("handleRegisterSource wrong type")
 	}
 	key := sink.appStreamKey
-	fmt.Println("handleRegisterSink:", key)
+	log.Println("handleRegisterSink:", key)
 
 	src, ok := p.receivers[key]
 	if !ok {
@@ -164,7 +165,7 @@ func (s *Source) work() {
 			if !ok {
 				panic("not rtmp message")
 			}
-			fmt.Println("srcwork:", rtmpMsg.Timestamp)
+			log.Println("srcwork:", rtmpMsg.Timestamp)
 			s.writeMessage(rtmpMsg)
 		}
 	}
@@ -174,14 +175,14 @@ func (sink *Sink) work() {
 	for {
 		select {
 		case m := <-sink.rtmpMsgChan:
-			fmt.Println("=======>receive message")
+			log.Println("=======>receive message")
 			sink.writeMessage(m)
 		}
 	}
 }
 
 func (src *Source) connectSink(msg *PadMessage) {
-	fmt.Println("src connectSink")
+	log.Println("src connectSink")
 	sink := msg.msg.(*Sink)
 	sink.keyInSrc = sink.appStreamKey + fmt.Sprintf("%p", sink)
 
@@ -211,7 +212,7 @@ func (src *Source) connectSink(msg *PadMessage) {
 		StreamID:    sink.functionalStreamId,
 		Payload:     src.AVCDecoderConfigurationRecord,
 	}
-	fmt.Println("=======>write metadata", len(vmsg.Payload))
+	log.Println("=======>write metadata", len(vmsg.Payload))
 	sink.rtmpMsgChan <- avMetaData
 	sink.rtmpMsgChan <- vmsg
 	sink.rtmpMsgChan <- amsg

@@ -49,7 +49,7 @@ func (h *RtmpUnpacker) Start() error {
 		if err != nil {
 			return err
 		}
-		fmt.Println("chunk timestamp:", chunk.timestamp)
+		log.Println("chunk timestamp:", chunk.timestamp)
 
 		msg, err := h.messageCollector.HandleReceiveChunk(chunk)
 		if err != nil {

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log"
 
 	"github.com/chinasarft/golive/utils/byteio"
 )
@@ -181,7 +182,7 @@ func complexHandshake(rw io.ReadWriter, C1TimeAndVersion []byte) (err error) {
 		err = fmt.Errorf("c1 digest check fail")
 		return
 	}
-	fmt.Println(ok, block)
+	log.Println(ok, block)
 	S0S1S2 := buf[1536*2:]
 	S0 := S0S1S2[:1]
 	S1 := S0S1S2[1 : 1536+1]
@@ -208,7 +209,7 @@ func complexHandshake(rw io.ReadWriter, C1TimeAndVersion []byte) (err error) {
 
 func complexHandshakeC1CheckAndDigest(C1 []byte) (ok bool, block *digestBlock) {
 	if ok, block = complexHandshakeC1CheckAndDigestSchema(C1, schema0); !ok {
-		fmt.Println("try schema1")
+		log.Println("try schema1")
 		ok, block = complexHandshakeC1CheckAndDigestSchema(C1, schema1)
 	}
 	return
