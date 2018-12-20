@@ -186,7 +186,7 @@ func (p *PadPool) handleRegisterSink(msg *PadMessage) {
 	log.Println("handleRegisterSink:", key, ok)
 	if !ok {
 		// TODO 推流还不存在，等待？
-		sink.result <- fmt.Errorf(key, "%s not exits", key)
+		sink.result <- fmt.Errorf("%s not exits", key)
 	} else {
 		sink.result <- nil
 		src.srcChan <- msg
@@ -264,11 +264,14 @@ func (src *Source) connectSink(msg *PadMessage) {
 		panic("repeater register")
 	}
 
-	avMetaData := &Message{
-		MessageType: 0x12,
-		Timestamp:   0,
-		StreamID:    sink.functionalStreamId,
-		Payload:     src.avMetaData,
+	if src.avMetaData != nil {
+		avMetaData := &Message{
+			MessageType: 0x12,
+			Timestamp:   0,
+			StreamID:    sink.functionalStreamId,
+			Payload:     src.avMetaData,
+		}
+		sink.rtmpMsgChan <- avMetaData
 	}
 
 	amsg := &Message{
@@ -285,7 +288,7 @@ func (src *Source) connectSink(msg *PadMessage) {
 		Payload:     src.VideoDecoderConfigurationRecord,
 	}
 	log.Println("=======>write metadata", len(vmsg.Payload))
-	sink.rtmpMsgChan <- avMetaData
+
 	sink.rtmpMsgChan <- vmsg
 	sink.rtmpMsgChan <- amsg
 }

@@ -61,7 +61,6 @@ type RtmpHandler struct {
 	audioCodecID                    int
 	VideoDecoderConfigurationRecord []byte // avc hevc
 	AACSequenceHeader               []byte
-	avMetaData                      []byte
 	functionalStreamId              uint32 /* streambegin 里面的参数，应该没啥用
 	                                      目前的实现是，该streamid作为user control message的消息msid
 		 	 	 	 	 	 	 	 	 	 并且该streamid的值为play这个消息的msid */
@@ -70,7 +69,9 @@ type RtmpHandler struct {
 	cancel context.CancelFunc
 	role   string
 
-	status int //做一个状态机？
+	status            int    // 做一个状态机？
+	hasReceivedAvMeta bool   // librtmp就不会发送@setDataFrame
+	avMetaData        []byte // 或者至少是在推流h265的时候是不支持的
 }
 
 func NewRtmpHandler(rwc io.ReadWriteCloser) *RtmpHandler {
@@ -252,7 +253,7 @@ func (h *RtmpHandler) OnVideoMessage(m *VideoMessage) error {
 
 	isKeyFrame := (m.Payload[0] >> 4)
 	vCodecId := int(m.Payload[0] & 0x0F)
-	if h.videoCodecID != vCodecId {
+	if h.hasReceivedAvMeta && h.videoCodecID != vCodecId {
 		return fmt.Errorf("video codec id not same:%d %d", h.videoCodecID, vCodecId)
 	}
 	if m.Payload[1] == 0 { // sequence header
@@ -272,7 +273,7 @@ func (h *RtmpHandler) OnVideoMessage(m *VideoMessage) error {
 func (h *RtmpHandler) OnAudioMessage(m *AudioMessage) error {
 
 	aCodecId := int((m.Payload[0] & 0xF0) >> 4)
-	if h.audioCodecID != aCodecId {
+	if h.hasReceivedAvMeta && h.audioCodecID != aCodecId {
 		return fmt.Errorf("video codec id not same:%d %d", h.audioCodecID, aCodecId)
 	}
 
@@ -872,6 +873,7 @@ func (h *RtmpHandler) handleSetDataFrame(r amf.Reader, m *DataMessage) error {
 
 			h.audioCodecID = aCodecID
 			h.videoCodecID = vCodecID
+			h.hasReceivedAvMeta = true
 		}
 	}
 
