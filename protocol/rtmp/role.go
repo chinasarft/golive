@@ -206,7 +206,8 @@ func (p *PadPool) handleUnregisterSink(msg *PadMessage) {
 	if !ok {
 		// 情况1:play时候还没有source, 目前play不存在source返回错误,不可能
 		// 情况2:unregsrc和unregsink几乎同时，先unregsrc，的却可能出现这种情况
-		log.Println(key + "source not registered(from sink)")
+		log.Println(key + " source not registered(from sink)")
+		h.Cancel()
 	} else {
 		src.srcChan <- msg
 	}
@@ -281,7 +282,7 @@ func (src *Source) connectSink(msg *PadMessage) {
 		MessageType: 9,
 		Timestamp:   0,
 		StreamID:    sink.functionalStreamId,
-		Payload:     src.AVCDecoderConfigurationRecord,
+		Payload:     src.VideoDecoderConfigurationRecord,
 	}
 	log.Println("=======>write metadata", len(vmsg.Payload))
 	sink.rtmpMsgChan <- avMetaData
@@ -308,8 +309,12 @@ func (src *Source) deleteSink(msg *PadMessage) {
 
 func (src *Source) writeMessage(m *Message) {
 	for _, sink := range src.sinks {
-		m.StreamID = sink.functionalStreamId
-		err := sink.writeMessage(m)
+		toSinkMsg := new(Message)
+		toSinkMsg.MessageType = m.MessageType
+		toSinkMsg.Payload = m.Payload
+		toSinkMsg.Timestamp = m.Timestamp
+		toSinkMsg.StreamID = sink.functionalStreamId
+		err := sink.writeMessage(toSinkMsg)
 		if err != nil {
 			delete(src.sinks, sink.keyInSrc)
 		}

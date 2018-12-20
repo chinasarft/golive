@@ -41,6 +41,12 @@ const (
 	rtmp_state_stop
 )
 
+var (
+	rtmp_codec_h264 int = 7
+	rtmp_codec_h265 int = 0x1c
+	rtmp_codec_aac  int = 0x0a
+)
+
 type RtmpHandler struct {
 	*RtmpUnpacker
 	rwc io.ReadWriteCloser
@@ -50,10 +56,13 @@ type RtmpHandler struct {
 	playCmdObj    PlayCmdParam
 	appStreamKey  string
 
-	AVCDecoderConfigurationRecord []byte
-	AACSequenceHeader             []byte
-	avMetaData                    []byte
-	functionalStreamId            uint32 /* streambegin 里面的参数，应该没啥用
+	avInfo                          amf.Object
+	videoCodecID                    int
+	audioCodecID                    int
+	VideoDecoderConfigurationRecord []byte // avc hevc
+	AACSequenceHeader               []byte
+	avMetaData                      []byte
+	functionalStreamId              uint32 /* streambegin 里面的参数，应该没啥用
 	                                      目前的实现是，该streamid作为user control message的消息msid
 		 	 	 	 	 	 	 	 	 	 并且该streamid的值为play这个消息的msid */
 	putMsg PutAvMessage
@@ -181,7 +190,6 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 				case "deleteStream":
 					// 7.2.2.3 The server does not send any response.
 					log.Println("receive deleteStream command")
-					h.Stop()
 				case "play":
 					log.Println("receive play command")
 					err = h.handlePlayCommand(r, m)
@@ -214,7 +222,8 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 	return nil
 }
 
-func (h *RtmpHandler) OnDataMessage(m *DataMessage) error {
+// TODO 其它data message需要透传么?
+func (h *RtmpHandler) OnDataMessage(m *DataMessage) (err error) {
 	switch m.MessageType {
 	case 15: //AFM3
 	case 18: //AFM0
@@ -226,25 +235,32 @@ func (h *RtmpHandler) OnDataMessage(m *DataMessage) error {
 				value := v.(string)
 				switch value {
 				case "@setDataFrame":
-					log.Println("@setDataFrame")
+					err = h.handleSetDataFrame(r, m)
 					// @setDataFrame固定长度是16字节
-					h.avMetaData = m.Payload[16:]
-					break
+					if err == nil {
+						h.avMetaData = m.Payload[16:]
+					}
+					return
 				}
 			}
 		}
 	}
-	return nil
+	return
 }
 
 func (h *RtmpHandler) OnVideoMessage(m *VideoMessage) error {
 
-	// isKeyFrame := (m.Payload[0] >> 4) == 1
-	// isAVCCodec := (m.Payload[0] | 0x0F) == 7
-	// if m.Payload[1] == 0 && isKeyFrame && isAVCCodec {
-	if h.AVCDecoderConfigurationRecord == nil && m.Payload[0] == 0x17 {
+	isKeyFrame := (m.Payload[0] >> 4)
+	vCodecId := int(m.Payload[0] & 0x0F)
+	if h.videoCodecID != vCodecId {
+		return fmt.Errorf("video codec id not same:%d %d", h.videoCodecID, vCodecId)
+	}
+	if m.Payload[1] == 0 { // sequence header
+		if isKeyFrame != 1 {
+			return fmt.Errorf("wrong vsequence header")
+		}
 		log.Println("receive metavideo and put:", len(m.Payload), m.Payload[0])
-		h.AVCDecoderConfigurationRecord = m.Payload
+		h.VideoDecoderConfigurationRecord = m.Payload
 	} else {
 		log.Println("receive video and put:", len(m.Payload), m.Payload[0], m.Timestamp)
 		h.putMsg((*Message)(m))
@@ -254,6 +270,11 @@ func (h *RtmpHandler) OnVideoMessage(m *VideoMessage) error {
 }
 
 func (h *RtmpHandler) OnAudioMessage(m *AudioMessage) error {
+
+	aCodecId := int((m.Payload[0] & 0xF0) >> 4)
+	if h.audioCodecID != aCodecId {
+		return fmt.Errorf("video codec id not same:%d %d", h.audioCodecID, aCodecId)
+	}
 
 	if m.Payload[1] == 0 {
 		h.AACSequenceHeader = m.Payload
@@ -795,8 +816,10 @@ func (s *RtmpHandler) MessageToChunk(m *Message, chunkSize uint32) ([]*Chunk, er
 		csid = 2
 	case 17, 20:
 		csid = 3
+	case 15, 18: // data message
+		csid = 4
 	case 9:
-		csid = 6 //TODO
+		csid = 6 // TODO csid怎么选择?
 	case 8:
 		csid = 4
 	case 4:
@@ -806,4 +829,51 @@ func (s *RtmpHandler) MessageToChunk(m *Message, chunkSize uint32) ([]*Chunk, er
 	chunkArray, err := m.ToType0Chunk(uint32(csid), chunkSize)
 
 	return chunkArray, err
+}
+
+func (h *RtmpHandler) handleSetDataFrame(r amf.Reader, m *DataMessage) error {
+
+	log.Println("@setDataFrame")
+
+	for i := 0; i < 2; i++ {
+		v, e := amf.ReadValue(r)
+		if e != nil {
+			if e == io.EOF {
+				break
+			}
+			return fmt.Errorf("handleSetDataFrame amf:%s", e.Error())
+		}
+
+		switch i {
+		case 0:
+		case 1:
+			avinfo, ok := v.(amf.Object)
+			if !ok {
+				panic("amf.object to amf.Object fail")
+			}
+			h.avInfo = avinfo
+			codecid, ok := avinfo["videocodecid"].(float64)
+			if !ok {
+				panic("videocodecid not float64")
+			}
+			vCodecID := int(codecid)
+			if vCodecID != rtmp_codec_h264 && vCodecID != rtmp_codec_h265 {
+				return fmt.Errorf("video not support codecid:%d", vCodecID)
+			}
+
+			codecid, ok = avinfo["audiocodecid"].(float64)
+			if !ok {
+				panic("audiocodecid not float64")
+			}
+			aCodecID := int(codecid)
+			if aCodecID != rtmp_codec_aac {
+				return fmt.Errorf("audio not support codecid:%d", aCodecID)
+			}
+
+			h.audioCodecID = aCodecID
+			h.videoCodecID = vCodecID
+		}
+	}
+
+	return nil
 }

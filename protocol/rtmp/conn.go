@@ -80,7 +80,7 @@ func (c *conn) serve() {
 	err := c.Start(c.ctx)
 	if err != nil {
 		c.NetConnWrapper.Close()
-		log.Println("rtmp HandshakeServer err:", err)
+		log.Println("start return:", err)
 	}
 
 }
