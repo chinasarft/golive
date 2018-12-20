@@ -9,6 +9,8 @@ import (
 
 type RtmpMessageHandler interface {
 	OnError()
+	OnHandleShakeSuccess()
+	OnHandleShakeFail()
 	OnProtocolControlMessaage(m *ProtocolControlMessaage) error
 	OnUserControlMessage(m *UserControlMessage) error
 	OnCommandMessage(m *CommandMessage) error
@@ -42,9 +44,11 @@ func NewRtmpUnpacker(rw io.ReadWriter, msgHandler RtmpMessageHandler) *RtmpUnpac
 func (h *RtmpUnpacker) Start(ctx context.Context) error {
 	err := handshake(h.rw)
 	if err != nil {
+		h.messageHandler.OnHandleShakeFail()
 		log.Println("rtmp HandshakeServer err:", err)
 		return err
 	}
+	h.messageHandler.OnHandleShakeSuccess()
 	for {
 		select {
 		case <-ctx.Done():

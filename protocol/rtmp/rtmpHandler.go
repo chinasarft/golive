@@ -23,6 +23,24 @@ type PlayCmdParam struct {
 	Reset      bool
 }
 
+const (
+	rtmp_state_init = iota
+	rtmp_state_hand_fail
+	rtmp_state_hand_success
+	rtmp_state_connect_success
+	rtmp_state_connect_fail
+	rtmp_state_crtstrm_success
+	rtmp_state_crtstrm_fail
+
+	rtmp_state_publish_success
+	rtmp_state_publish_fail
+
+	rtmp_state_play_success
+	rtmp_state_play_fail
+
+	rtmp_state_stop
+)
+
 type RtmpHandler struct {
 	*RtmpUnpacker
 	rwc io.ReadWriteCloser
@@ -42,6 +60,8 @@ type RtmpHandler struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	role   string
+
+	status int //做一个状态机？
 }
 
 func NewRtmpHandler(rwc io.ReadWriteCloser) *RtmpHandler {
@@ -52,6 +72,18 @@ func NewRtmpHandler(rwc io.ReadWriteCloser) *RtmpHandler {
 }
 
 func (h *RtmpHandler) OnError() {
+	h.Stop()
+}
+
+func (h *RtmpHandler) OnHandleShakeSuccess() {
+	h.status = rtmp_state_hand_success
+}
+
+func (h *RtmpHandler) OnHandleShakeFail() {
+	h.status = rtmp_state_hand_fail
+}
+
+func (h *RtmpHandler) Stop() {
 	if h.role == "source" {
 		UnregisterSource(h)
 	} else if h.role == "sink" {
@@ -59,6 +91,7 @@ func (h *RtmpHandler) OnError() {
 	} else {
 		h.Cancel()
 	}
+	h.status = rtmp_state_stop
 }
 
 func (h *RtmpHandler) Cancel() {
@@ -113,10 +146,20 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 				//NetConnection command
 				case "connect":
 					log.Println("receive connect command")
-					return h.handleConnectCommand(r)
+					err = h.handleConnectCommand(r)
+					if err == nil {
+						h.status = rtmp_state_connect_success
+					} else {
+						h.status = rtmp_state_connect_fail
+					}
 				case "createStream":
 					log.Println("receive createStream command")
 					err = h.handleCreateStreamCommand(r)
+					if err == nil {
+						h.status = rtmp_state_crtstrm_success
+					} else {
+						h.status = rtmp_state_crtstrm_fail
+					}
 					return
 
 				//NetStream command
@@ -129,9 +172,16 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 							h.role = "source"
 						}
 					}
+					if err == nil {
+						h.status = rtmp_state_publish_success
+					} else {
+						h.status = rtmp_state_publish_fail
+					}
 					return
 				case "deleteStream":
+					// 7.2.2.3 The server does not send any response.
 					log.Println("receive deleteStream command")
+					h.Stop()
 				case "play":
 					log.Println("receive play command")
 					err = h.handlePlayCommand(r, m)
@@ -140,6 +190,11 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 						if err == nil {
 							h.role = "sink"
 						}
+					}
+					if err == nil {
+						h.status = rtmp_state_play_success
+					} else {
+						h.status = rtmp_state_play_fail
 					}
 					return
 
@@ -261,6 +316,9 @@ connect response:
 	Command Name已经被处理掉了
 */
 func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
+	if h.status != rtmp_state_hand_success {
+		panic("handle connect in wrong state")
+	}
 
 	for i := 0; i < 2; i++ {
 		v, e := amf.ReadValue(r)
@@ -348,6 +406,9 @@ func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 }
 
 func (h *RtmpHandler) handleCreateStreamCommand(r amf.Reader) error {
+	if h.status != rtmp_state_connect_success {
+		panic("handle createstream in wrong state")
+	}
 	transactionId := 0
 	for {
 		v, e := amf.ReadValue(r)
