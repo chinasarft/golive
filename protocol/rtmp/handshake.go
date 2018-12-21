@@ -44,7 +44,7 @@ type keyBlock struct {
 }
 
 // 包含了全部的C1或者S1的数据
-// digestblock格式如意，以schema0为例子
+// digestblock格式如下，以schema0为例子
 // |time|version|keyblock|(digestblock|offset|random1|digest|random2)|
 // digest的是计算digest前的数据即:|time|version|keyblock|(digestblock|offset|random1|
 //             digest后的数据即:|random2)|

@@ -241,12 +241,9 @@ func readChunkMessageHeader(r io.Reader, chunkFmt uint8) (*ChunkMessageHeader, e
 func readChunkMessageHeaderType0(r io.Reader) (*ChunkMessageHeader, error) {
 	buf := [11]byte{}
 	bulSlice := buf[0:len(buf)]
-	rLen, err := r.Read(bulSlice)
+	_, err := io.ReadFull(r, bulSlice)
 	if err != nil {
 		return nil, err
-	}
-	if rLen != len(buf) {
-		return nil, fmt.Errorf("not read enough data")
 	}
 	bio := bytes.NewReader(bulSlice)
 
@@ -273,12 +270,9 @@ func readChunkMessageHeaderType0(r io.Reader) (*ChunkMessageHeader, error) {
 func readChunkMessageHeaderType1(r io.Reader) (*ChunkMessageHeader, error) {
 	buf := [7]byte{}
 	bulSlice := buf[0:len(buf)]
-	rLen, err := r.Read(bulSlice)
+	_, err := io.ReadFull(r, bulSlice)
 	if err != nil {
 		return nil, err
-	}
-	if rLen != len(buf) {
-		return nil, fmt.Errorf("not read enough data")
 	}
 	bio := bytes.NewReader(bulSlice)
 
@@ -331,24 +325,13 @@ func readChunkData(r io.Reader, remain, chunkSize uint32) ([]byte, error) {
 	if readLen > chunkSize {
 		readLen = chunkSize
 	}
-	totalRead := readLen
 
 	data := make([]byte, readLen)
-	var retLen int = 0
-	var err error
 
-	for {
-		retLen, err = r.Read(data[totalRead-readLen : totalRead])
-		if err != nil {
-			return nil, err
-		}
-		readLen -= uint32(retLen)
-		if readLen == 0 {
-			return data, nil
-		}
+	if _, err := io.ReadFull(r, data); err != nil {
+		return nil, err
 	}
-
-	return nil, fmt.Errorf("can't be here")
+	return data, nil
 }
 
 func NewChunkSerializer(chunkSize uint32) *ChunkSerializer {

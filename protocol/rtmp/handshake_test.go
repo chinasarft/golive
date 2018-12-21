@@ -313,10 +313,10 @@ func TestCheckC1(t *testing.T) {
 		log.Println("schema0 success")
 	}
 
-	err = checkC1(t, schema1c1)
-	if err != nil {
-		t.Error(err)
-	}
+	// err = checkC1(t, schema1c1)
+	// if err != nil {
+	// 	t.Error(err)
+	// }
 }
 
 func TestHandshake(t *testing.T) {
