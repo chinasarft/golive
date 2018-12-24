@@ -1,11 +1,12 @@
-package rtmp
+package rtmpserver
 
 import (
 	"bufio"
-	"context"
 	"log"
 	"net"
 	"time"
+
+	"github.com/chinasarft/golive/protocol/rtmp"
 )
 
 const (
@@ -32,7 +33,7 @@ type NetConnWrapper struct {
 
 type conn struct {
 	*NetConnWrapper
-	*RtmpHandler
+	*rtmp.RtmpHandler
 }
 
 func NewNetConnWrapper(c net.Conn, bufSize int) *NetConnWrapper {
@@ -69,15 +70,14 @@ func NewConn(netConn net.Conn, bufSize int) *conn {
 	cw := NewNetConnWrapper(netConn, bufSize)
 	c := &conn{
 		NetConnWrapper: cw,
-		RtmpHandler:    NewRtmpHandler(cw),
+		RtmpHandler:    rtmp.NewRtmpHandler(cw, conns),
 	}
 
 	return c
 }
 
 func (c *conn) serve() {
-	c.ctx, c.cancel = context.WithCancel(context.Background())
-	err := c.Start(c.ctx)
+	err := c.Start()
 	if err != nil {
 		c.NetConnWrapper.Close()
 		log.Println("start return:", err)

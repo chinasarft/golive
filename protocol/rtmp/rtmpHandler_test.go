@@ -105,8 +105,22 @@ func (hs *testHandler) Write(p []byte) (n int, err error) {
 	return hs.writeBuf.Write(p)
 }
 
-func (hs *testHandler) Close() error {
+func (hs *testHandler) OnSourceDetermined(h *RtmpHandler, ctx context.Context) (PutAVDMessage, error) {
+	output := func(m *Message) error {
+		return nil
+	}
+	return output, nil
+}
+
+func (hs *testHandler) OnSinkDetermined(h *RtmpHandler, ctx context.Context) error {
 	return nil
+}
+func (hs *testHandler) OnDestroySource(h *RtmpHandler) {
+	return
+}
+
+func (hs *testHandler) OnDestroySink(h *RtmpHandler) {
+	return
 }
 
 func TestRtmpReceiver(t *testing.T) {
@@ -118,12 +132,11 @@ func TestRtmpReceiver(t *testing.T) {
 		t.Errorf("hex decode msg fail:%s", err)
 	}
 
-	rwc := newTestHandler(msgByte)
+	rw := newTestHandler(msgByte)
 
-	handler := NewRtmpHandler(rwc)
+	handler := NewRtmpHandler(rw, rw)
 
-	handler.ctx, handler.cancel = context.WithCancel(context.Background())
-	err = handler.Start(handler.ctx)
+	err = handler.Start()
 	if err != nil && err != io.EOF {
 		t.Fatal("handler.Start", err)
 	}
@@ -135,7 +148,7 @@ func TestRtmpReceiver(t *testing.T) {
 	}
 
 	offset := 1 + 1536 + 1536 // 1 for s0, 1536 s1 s2
-	allresp := rwc.writeBuf.Bytes()
+	allresp := rw.writeBuf.Bytes()
 	realConnectResp := allresp[offset : offset+len(connectRespMsgByte)]
 
 	if bytes.Compare(connectRespMsgByte, realConnectResp) != 0 {

@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/chinasarft/golive/protocol/rtmp"
+	"github.com/chinasarft/golive/app/rtmpserver"
 )
 
 func printNumGoroutine() {
@@ -31,7 +31,7 @@ func main() {
 
 	log.SetFlags(log.Ldate | log.Lmicroseconds | log.Lshortfile)
 	log.Println("rtmp server starting...")
-	err := rtmp.ListenAndServe("", nil)
+	err := rtmpserver.ListenAndServe("", nil)
 	if err != nil {
 		log.Println("fail to start rtmp:", err)
 	}

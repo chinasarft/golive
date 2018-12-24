@@ -11,6 +11,14 @@ import (
 	"github.com/chinasarft/golive/utils/amf"
 )
 
+type PutAVDMessage func(m *Message) error
+type Pad interface {
+	OnSourceDetermined(h *RtmpHandler, ctx context.Context) (PutAVDMessage, error)
+	OnSinkDetermined(h *RtmpHandler, ctx context.Context) error
+	OnDestroySource(h *RtmpHandler)
+	OnDestroySink(h *RtmpHandler)
+}
+
 type ConnectCmdParam struct {
 	PublishName string //stream name
 	PublishType string
@@ -48,71 +56,117 @@ var (
 )
 
 type RtmpHandler struct {
-	*RtmpUnpacker
-	rwc io.ReadWriteCloser
+	chunkUnpacker *ChunkUnpacker
+	chunkPacker   *ChunkPacker
+	rw            io.ReadWriter
 
 	connetCmdObj  map[string]interface{}
 	publishCmdObj ConnectCmdParam
 	playCmdObj    PlayCmdParam
 	appStreamKey  string
 
-	avInfo                          amf.Object
-	videoCodecID                    int
-	audioCodecID                    int
-	VideoDecoderConfigurationRecord []byte // avc hevc
-	AACSequenceHeader               []byte
-	functionalStreamId              uint32 /* streambegin 里面的参数，应该没啥用
-	                                      目前的实现是，该streamid作为user control message的消息msid
-		 	 	 	 	 	 	 	 	 	 并且该streamid的值为play这个消息的msid */
-	putMsg PutAvMessage
+	avInfo             amf.Object
+	videoCodecID       int
+	audioCodecID       int
+	hasReceivedAvMeta  bool   // librtmp就不会发送@setDataFrame
+	functionalStreamId uint32 /* streambegin 里面的参数，应该没啥用
+	                             目前的实现是，该streamid作为user control message的消息msid
+		 	 	 	 	 	 	   并且该streamid的值为play这个消息的msid */
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	role   string
+	pad    Pad
+	putMsg PutAVDMessage
 
-	status            int    // 做一个状态机？
-	hasReceivedAvMeta bool   // librtmp就不会发送@setDataFrame
-	avMetaData        []byte // 或者至少是在推流h265的时候是不支持的
+	status int // 做一个状态机？
 }
 
-func NewRtmpHandler(rwc io.ReadWriteCloser) *RtmpHandler {
-	handler := &RtmpHandler{}
-	handler.RtmpUnpacker = NewRtmpUnpacker(rwc, handler)
-	handler.rwc = rwc
-	return handler
+func NewRtmpHandler(rw io.ReadWriter, pad Pad) *RtmpHandler {
+	return &RtmpHandler{
+		chunkUnpacker: NewChunkUnpacker(),
+		chunkPacker:   NewChunkPacker(),
+		rw:            rw,
+		pad:           pad,
+	}
 }
 
-func (h *RtmpHandler) OnError() {
-	h.Stop()
+func (h *RtmpHandler) Start() error {
+	err := handshake(h.rw)
+	if err != nil {
+		h.handleShakeFail()
+		log.Println("rtmp HandshakeServer err:", err)
+		return err
+	}
+	h.handleShakeSuccess()
+	h.ctx, h.cancel = context.WithCancel(context.Background())
+	for {
+		msg, err := h.chunkUnpacker.getRtmpMessage(h.rw)
+		if err != nil {
+			h.stop()
+			return err
+		}
+		switch msg.MessageType {
+		case 1, 2, 3, 5, 6:
+			err = h.handleProtocolControlMessaage((*ProtocolControlMessaage)(msg))
+		case 4:
+			err = h.handleUserControlMessage((*UserControlMessage)(msg))
+		case 8:
+			err = h.handleAudioMessage((*AudioMessage)(msg))
+		case 9:
+			err = h.handleVideoMessage((*VideoMessage)(msg))
+		case 15, 18:
+			err = h.handleDataMessage((*DataMessage)(msg))
+		case 17, 20:
+			err = h.handleCommandMessage((*CommandMessage)(msg))
+		case 16, 19:
+			err = h.handleSharedObjectMessage((*SharedObjectMessage)(msg))
+		case 22:
+			err = h.handleAggregateMessage((*AggregateMessage)(msg))
+		}
+		if err != nil {
+			h.stop()
+			return err
+		}
+	}
+
 }
 
-func (h *RtmpHandler) OnHandleShakeSuccess() {
+func (h *RtmpHandler) GetAppStreamKey() string {
+	return h.appStreamKey
+}
+
+func (h *RtmpHandler) GetFunctionalStreamId() uint32 {
+	return h.functionalStreamId
+}
+
+func (h *RtmpHandler) handleShakeSuccess() {
 	h.status = rtmp_state_hand_success
 }
 
-func (h *RtmpHandler) OnHandleShakeFail() {
+func (h *RtmpHandler) handleShakeFail() {
 	h.status = rtmp_state_hand_fail
 }
 
-func (h *RtmpHandler) Stop() {
+func (h *RtmpHandler) stop() {
 	if h.role == "source" {
-		UnregisterSource(h)
+		h.pad.OnDestroySource(h)
 	} else if h.role == "sink" {
-		UnegisterSink(h)
-	} else {
-		h.Cancel()
+		h.pad.OnDestroySink(h)
 	}
+	h.Cancel()
+
 	h.status = rtmp_state_stop
 }
 
 func (h *RtmpHandler) Cancel() {
 	h.cancel()
-	h.rwc.Close()
 }
 
-func (h *RtmpHandler) OnProtocolControlMessaage(m *ProtocolControlMessaage) error {
+func (h *RtmpHandler) handleProtocolControlMessaage(m *ProtocolControlMessaage) error {
 	switch m.MessageType {
 	case 1:
-		h.chunkStreamSet.SetChunkSize(1024) // TODO 先设置成1024
+		h.chunkUnpacker.SetChunkSize(1024) // TODO 先设置成1024
 	case 2:
 	case 3:
 	case 5:
@@ -121,7 +175,7 @@ func (h *RtmpHandler) OnProtocolControlMessaage(m *ProtocolControlMessaage) erro
 	return nil
 }
 
-func (h *RtmpHandler) OnUserControlMessage(m *UserControlMessage) error {
+func (h *RtmpHandler) handleUserControlMessage(m *UserControlMessage) error {
 	eventType := int(m.Payload[0])*256 + int(m.Payload[1])
 	switch eventType {
 	case 0: // StreamBegin
@@ -142,7 +196,7 @@ func (h *RtmpHandler) OnUserControlMessage(m *UserControlMessage) error {
 	return nil
 }
 
-func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
+func (h *RtmpHandler) handleCommandMessage(m *CommandMessage) (err error) {
 	switch m.MessageType {
 	case 17: //AMF3
 	case 20: //AMF0
@@ -177,7 +231,7 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 					log.Println("receive publish command")
 					err = h.handlePublishCommand(r)
 					if err == nil {
-						h.putMsg, err = RegisterSource(h)
+						h.putMsg, err = h.pad.OnSourceDetermined(h, h.ctx)
 						if err == nil {
 							h.role = "source"
 						}
@@ -195,7 +249,7 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 					log.Println("receive play command")
 					err = h.handlePlayCommand(r, m)
 					if err == nil {
-						err = RegisterSink(h)
+						err = h.pad.OnSinkDetermined(h, h.ctx)
 						if err == nil {
 							h.role = "sink"
 						}
@@ -224,7 +278,7 @@ func (h *RtmpHandler) OnCommandMessage(m *CommandMessage) (err error) {
 }
 
 // TODO 其它data message需要透传么?
-func (h *RtmpHandler) OnDataMessage(m *DataMessage) (err error) {
+func (h *RtmpHandler) handleDataMessage(m *DataMessage) (err error) {
 	switch m.MessageType {
 	case 15: //AFM3
 	case 18: //AFM0
@@ -239,7 +293,9 @@ func (h *RtmpHandler) OnDataMessage(m *DataMessage) (err error) {
 					err = h.handleSetDataFrame(r, m)
 					// @setDataFrame固定长度是16字节
 					if err == nil {
-						h.avMetaData = m.Payload[16:]
+						if err = h.putMsg((*Message)(m)); err != nil {
+							return
+						}
 					}
 					return
 				}
@@ -249,7 +305,7 @@ func (h *RtmpHandler) OnDataMessage(m *DataMessage) (err error) {
 	return
 }
 
-func (h *RtmpHandler) OnVideoMessage(m *VideoMessage) error {
+func (h *RtmpHandler) handleVideoMessage(m *VideoMessage) error {
 
 	isKeyFrame := (m.Payload[0] >> 4)
 	vCodecId := int(m.Payload[0] & 0x0F)
@@ -261,32 +317,31 @@ func (h *RtmpHandler) OnVideoMessage(m *VideoMessage) error {
 			return fmt.Errorf("wrong vsequence header")
 		}
 		log.Println("receive metavideo and put:", len(m.Payload), m.Payload[0])
-		h.VideoDecoderConfigurationRecord = m.Payload
-	} else {
-		log.Println("receive video and put:", len(m.Payload), m.Payload[0], m.Timestamp)
-		h.putMsg((*Message)(m))
+	}
+	log.Println("receive video and put:", len(m.Payload), m.Payload[0], m.Timestamp)
+	if err := h.putMsg((*Message)(m)); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (h *RtmpHandler) OnAudioMessage(m *AudioMessage) error {
+func (h *RtmpHandler) handleAudioMessage(m *AudioMessage) error {
 
 	aCodecId := int((m.Payload[0] & 0xF0) >> 4)
 	if h.hasReceivedAvMeta && h.audioCodecID != aCodecId {
 		return fmt.Errorf("video codec id not same:%d %d", h.audioCodecID, aCodecId)
 	}
 
-	if m.Payload[1] == 0 {
-		h.AACSequenceHeader = m.Payload
-	} else {
-		log.Println("receive audio and put:", len(m.Payload), m.Timestamp)
-		h.putMsg((*Message)(m))
+	log.Println("receive audio and put:", len(m.Payload), m.Timestamp)
+	if err := h.putMsg((*Message)(m)); err != nil {
+		return err
 	}
+
 	return nil
 }
 
-func (h *RtmpHandler) OnSharedObjectMessage(m *SharedObjectMessage) error {
+func (h *RtmpHandler) handleSharedObjectMessage(m *SharedObjectMessage) error {
 	switch m.MessageType {
 	case 16: //AFM3
 	case 19: //AFM0
@@ -294,7 +349,7 @@ func (h *RtmpHandler) OnSharedObjectMessage(m *SharedObjectMessage) error {
 	return nil
 }
 
-func (h *RtmpHandler) OnAggregateMessage(m *AggregateMessage) error {
+func (h *RtmpHandler) handleAggregateMessage(m *AggregateMessage) error {
 	return nil
 }
 
@@ -371,40 +426,40 @@ func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 	w := &bytes.Buffer{}
 
 	ackMsg := NewAckMessage(2500000)
-	chunkArray, err := h.MessageToChunk(ackMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err := h.MessageToChunk(ackMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
 	setPeerBandwidthMsg := NewSetPeerBandwidthMessage(2500000, 2)
-	chunkArray, err = h.MessageToChunk(setPeerBandwidthMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err = h.MessageToChunk(setPeerBandwidthMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
-	bakChunkSize := h.chunkSerializer.GetChunkSize()
+	bakChunkSize := h.chunkPacker.GetChunkSize()
 	defer func() {
 		if err != nil {
-			h.chunkSerializer.SetChunkSize(bakChunkSize)
+			h.chunkPacker.SetChunkSize(bakChunkSize)
 		}
 	}()
 
-	h.chunkSerializer.SetChunkSize(1024)
+	h.chunkPacker.SetChunkSize(1024)
 
-	setChunkMsg := NewSetChunkSizeMessage(h.chunkSerializer.GetChunkSize())
-	chunkArray, err = h.MessageToChunk(setChunkMsg, h.chunkSerializer.sendChunkSize)
+	setChunkMsg := NewSetChunkSizeMessage(h.chunkPacker.GetChunkSize())
+	chunkArray, err = h.MessageToChunk(setChunkMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
@@ -413,16 +468,16 @@ func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 	if err != nil {
 		return err
 	}
-	chunkArray, err = h.MessageToChunk(connectOkMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err = h.MessageToChunk(connectOkMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
-	_, err = h.rwc.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 
 	return err
 }
@@ -455,16 +510,16 @@ func (h *RtmpHandler) handleCreateStreamCommand(r amf.Reader) error {
 	if err != nil {
 		return err
 	}
-	chunkArray, err := h.MessageToChunk(createStreamMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err := h.MessageToChunk(createStreamMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
-	_, err = h.rwc.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 
 	return err
 }
@@ -573,16 +628,16 @@ func (h *RtmpHandler) handlePublishCommand(r amf.Reader) error {
 	if err != nil {
 		return err
 	}
-	chunkArray, err := h.MessageToChunk(publishOkMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err := h.MessageToChunk(publishOkMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
-	_, err = h.rwc.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 
 	return err
 }
@@ -699,84 +754,84 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 	h.functionalStreamId = m.StreamID
 
 	streamIsRecordedMsg := NewUserControlCommandStreamIsRecorded(m.StreamID) // 这个streamid 应该没啥用
-	chunkArray, err := h.MessageToChunk(streamIsRecordedMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err := h.MessageToChunk(streamIsRecordedMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
 	streamBeginMsg := NewUserControlCommandStreamBegin(m.StreamID) // 这个streamid 应该也没啥用
-	chunkArray, err = h.MessageToChunk(streamBeginMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err = h.MessageToChunk(streamBeginMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
 	playResetMsg, _ := NewPlayResetMessage(m.StreamID) // 这个streamid 应该也没啥用
-	chunkArray, err = h.MessageToChunk(playResetMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err = h.MessageToChunk(playResetMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
-	_, err = h.rwc.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 	if err != nil {
 		return err
 	}
 
 	w.Reset()
 	playStartMsg, _ := NewPlayStartMessage(m.StreamID)
-	chunkArray, err = h.MessageToChunk(playStartMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err = h.MessageToChunk(playStartMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
-	_, err = h.rwc.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 	if err != nil {
 		return err
 	}
 
 	w.Reset()
 	dataStartMsg, _ := NewDataStartMessage(m.StreamID)
-	chunkArray, err = h.MessageToChunk(dataStartMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err = h.MessageToChunk(dataStartMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
-	_, err = h.rwc.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 	if err != nil {
 		return err
 	}
 
 	w.Reset()
 	playPublishNotifyStartMsg, _ := NewPlayPublishNotifyMessage(m.StreamID)
-	chunkArray, err = h.MessageToChunk(playPublishNotifyStartMsg, h.chunkSerializer.sendChunkSize)
+	chunkArray, err = h.MessageToChunk(playPublishNotifyStartMsg, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
-	_, err = h.rwc.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 	if err != nil {
 		return err
 	}
@@ -784,20 +839,20 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 	return err
 }
 
-func (h *RtmpHandler) writeMessage(m *Message) error {
+func (h *RtmpHandler) WriteMessage(m *Message) error {
 
 	w := &bytes.Buffer{}
 
-	chunkArray, err := h.MessageToChunk(m, h.chunkSerializer.sendChunkSize)
+	chunkArray, err := h.MessageToChunk(m, h.chunkPacker.sendChunkSize)
 	if err != nil {
 		return err
 	}
-	err = h.chunkSerializer.SerializerChunk(chunkArray, w)
+	err = h.chunkPacker.SerializerChunk(chunkArray, w)
 	if err != nil {
 		return err
 	}
 
-	_, err = h.rwc.Write(w.Bytes())
+	_, err = h.rw.Write(w.Bytes())
 	if err != nil {
 		return err
 	}

@@ -1,4 +1,4 @@
-package rtmp
+package rtmpserver
 
 import (
 	"errors"

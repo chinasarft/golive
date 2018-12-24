@@ -6,9 +6,17 @@ import (
 	"io"
 	"log"
 
-	//"github.com/chinasarft/golive/av"
 	"github.com/chinasarft/golive/utils/byteio"
 )
+
+/*
++--------------+----------------+--------------------+--------------+
+ | Basic Header | Message Header | Extended Timestamp |  Chunk Data  |
+ +--------------+----------------+--------------------+--------------+
+ |                                                    |
+ |<------------------- Chunk Header ----------------->|
+                            Chunk Format
+*/
 
 type ChunkBasicHeader struct {
 	format        uint8
@@ -30,15 +38,6 @@ type Chunk struct {
 	data []byte
 }
 
-/*
-+--------------+----------------+--------------------+--------------+
- | Basic Header | Message Header | Extended Timestamp |  Chunk Data  |
- +--------------+----------------+--------------------+--------------+
- |                                                    |
- |<------------------- Chunk Header ----------------->|
-                            Chunk Format
-*/
-
 //Different message streams multiplexed onto the same chunk stream
 //      are demultiplexed based on their message stream IDs
 type ChunkStream struct {
@@ -48,94 +47,9 @@ type ChunkStream struct {
 	remain        uint32
 }
 
-type ChunkStreamSet struct {
-	streams   map[uint32]*ChunkStream
-	chunkSize uint32
-}
-
-type ChunkSerializer struct {
-	sendChunkSize uint32
-	sendStreams   map[uint32]*ChunkStream // 一个chunkStream可以发送多个messageStream，所以这里还是要需要该信息
-}
-
-func NewChunkStreamSet(chunkSize uint32) *ChunkStreamSet {
-	return &ChunkStreamSet{
-		streams:   make(map[uint32]*ChunkStream),
-		chunkSize: chunkSize,
-	}
-}
-
 func (cbh ChunkBasicHeader) isStreamIDExists() bool {
 	return cbh.format == 0
 }
-
-func (s *ChunkStreamSet) SetChunkSize(size uint32) {
-	s.chunkSize = size
-}
-
-// chunk都带有完整的信息
-func (s *ChunkStreamSet) ReadChunk(r io.Reader) (*Chunk, error) {
-
-	chunkBasicHdr, err := getChunkBasicHeader(r)
-	if err != nil {
-		return nil, err
-	}
-
-	cs, ok := s.streams[chunkBasicHdr.chunkStreamID]
-	if !ok {
-		cs = &ChunkStream{}
-		s.streams[chunkBasicHdr.chunkStreamID] = cs
-		cs.ChunkStreamID = chunkBasicHdr.chunkStreamID
-	}
-
-	chunkMessageHdr, err := readChunkMessageHeader(r, chunkBasicHdr.format)
-	if err != nil {
-		return nil, err
-	}
-
-	if cs.remain == 0 {
-		switch chunkBasicHdr.format {
-		case 0:
-			cs.remain = chunkMessageHdr.messageLength
-			cs.ChunkBasicHeader = *chunkBasicHdr
-			cs.ChunkMessageHeader = *chunkMessageHdr
-		case 1:
-			cs.remain = chunkMessageHdr.messageLength
-			cs.messageLength = chunkMessageHdr.messageLength
-			cs.messageTypeID = chunkMessageHdr.messageTypeID
-			chunkMessageHdr.timestamp += cs.timestamp
-			cs.timestamp = chunkMessageHdr.timestamp
-			chunkMessageHdr.messageStreamID = cs.messageStreamID
-		case 2:
-			cs.remain = cs.messageLength
-			chunkMessageHdr.timestamp += cs.timestamp
-			cs.timestamp = chunkMessageHdr.timestamp
-			chunkMessageHdr.messageLength = cs.messageLength
-			chunkMessageHdr.messageTypeID = cs.messageTypeID
-			chunkMessageHdr.messageStreamID = cs.messageStreamID
-		case 3:
-			cs.remain = cs.messageLength
-			chunkMessageHdr.timestamp = cs.timestamp
-			chunkMessageHdr.messageLength = cs.messageLength
-			chunkMessageHdr.messageTypeID = cs.messageTypeID
-			chunkMessageHdr.messageStreamID = cs.messageStreamID
-		}
-	}
-	if !chunkBasicHdr.isStreamIDExists() {
-		chunkMessageHdr.messageStreamID = cs.messageStreamID
-	}
-
-	data, err := readChunkData(r, cs.remain, s.chunkSize)
-	if err != nil {
-		return nil, err
-	}
-
-	cs.remain -= uint32(len(data))
-
-	return &Chunk{chunkBasicHdr, chunkMessageHdr, data}, nil
-}
-
-//------------------
 
 /*
  0 1 2 3 4 5 6 7
@@ -334,13 +248,6 @@ func readChunkData(r io.Reader, remain, chunkSize uint32) ([]byte, error) {
 	return data, nil
 }
 
-func NewChunkSerializer(chunkSize uint32) *ChunkSerializer {
-	return &ChunkSerializer{
-		sendChunkSize: chunkSize,
-		sendStreams:   make(map[uint32]*ChunkStream),
-	}
-}
-
 func serializerChunkBasicHeader(fmt uint8, csid uint32, w *bytes.Buffer) {
 
 	h := fmt << 6
@@ -417,76 +324,4 @@ func (c *Chunk) serializerType3(w *bytes.Buffer) error {
 	serializerChunkBasicHeader(3, c.ChunkBasicHeader.chunkStreamID, w)
 	w.Write(c.data)
 	return nil
-}
-
-// 送入的chunk.timestamp都是type0的timestamp，需要自己判断
-func (s *ChunkSerializer) SerializerChunk(chunkArray []*Chunk, w *bytes.Buffer) (err error) {
-
-	for _, chunk := range chunkArray {
-
-		if err != nil {
-			return err
-		}
-
-		cs, ok := s.sendStreams[chunk.chunkStreamID]
-		if !ok {
-			cs = &ChunkStream{}
-			s.sendStreams[chunk.chunkStreamID] = cs
-			cs.ChunkStreamID = chunk.chunkStreamID
-			if cs.format != 0 {
-				panic("chunkSerializer first chunk fmt not 0")
-			}
-		}
-
-		isProtoCtrlMsg := false
-		if chunk.chunkStreamID == 2 && chunk.messageStreamID == 0 &&
-			chunk.messageTypeID != 4 && chunk.messageTypeID < 7 {
-			isProtoCtrlMsg = true
-		}
-
-		if isProtoCtrlMsg || cs.messageStreamID != chunk.messageStreamID || !ok {
-			cs.ChunkBasicHeader = *chunk.ChunkBasicHeader
-			cs.ChunkMessageHeader = *chunk.ChunkMessageHeader
-			cs.format = 0
-			err = chunk.serializerType0(w)
-		} else {
-			if cs.messageStreamID != chunk.messageStreamID {
-				panic("msid should equal")
-			}
-			timeDelta := chunk.timestamp - cs.timestamp
-			if cs.messageLength == chunk.messageLength && cs.messageTypeID == chunk.messageTypeID {
-
-				if cs.timestamp == chunk.timestamp || cs.timeDelta == timeDelta {
-					chunk.serializerType3(w)
-					cs.format = 3
-				} else {
-					cs.timeDelta = timeDelta
-					chunk.timeDelta = timeDelta
-					chunk.serializerType2(w, cs.timeDelta)
-					cs.format = 2
-					cs.timestamp = chunk.timestamp
-				}
-
-			} else {
-				cs.timeDelta = timeDelta
-				chunk.timeDelta = timeDelta
-				chunk.serializerType1(w, cs.timeDelta)
-				cs.format = 1
-				cs.timestamp = chunk.timestamp
-				cs.messageLength = chunk.messageLength
-				cs.messageTypeID = chunk.messageTypeID
-			}
-		}
-
-	}
-
-	return nil
-}
-
-func (s *ChunkSerializer) SetChunkSize(chunkSize uint32) {
-	s.sendChunkSize = chunkSize
-}
-
-func (s *ChunkSerializer) GetChunkSize() uint32 {
-	return s.sendChunkSize
 }
