@@ -209,3 +209,28 @@ func (s *ChunkPacker) SetChunkSize(chunkSize uint32) {
 func (s *ChunkPacker) GetChunkSize() uint32 {
 	return s.sendChunkSize
 }
+
+// m是一个完整的消息，这个函数会拆分成chunk
+func (p *ChunkPacker) MessageToChunk(m *Message) ([]*Chunk, error) {
+
+	csid := 2
+	switch m.MessageType {
+	case 1, 2, 3, 4, 5, 6:
+		if m.StreamID != 0 {
+			return nil, fmt.Errorf("send msg streamid:%d for prot ctrl msg", m.StreamID)
+		}
+		csid = 2
+	case TYPE_CMDMSG_AMF0, TYPE_CMDMSG_AMF3:
+		csid = 3 // TODO ffmpeg抓包,有时候是3有时候是8,应该是不通的命令
+	case TYPE_DATA_AMF0, TYPE_DATA_AMF3: // data message
+		csid = 4
+	case TYPE_VIDEO:
+		csid = 6 // TODO csid怎么选择?
+	case TYPE_AUDIO:
+		csid = 4
+	}
+
+	chunkArray, err := m.ToType0Chunk(uint32(csid), p.sendChunkSize)
+
+	return chunkArray, err
+}

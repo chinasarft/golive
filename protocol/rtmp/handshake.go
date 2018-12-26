@@ -54,10 +54,11 @@ type digestBlock struct {
 	random1      []byte
 	digest       []byte // 32位固定长度
 	random2      []byte
+	offset       []byte
 	digestOffset int
 }
 
-/*
+// TODO 算法中并没有用到这个东西，所以keyblock没用?
 func parseHandshakeKey(data []byte) (key *keyBlock, err error) {
 	key = &keyBlock{}
 	key.offset = data[760:764]
@@ -66,18 +67,67 @@ func parseHandshakeKey(data []byte) (key *keyBlock, err error) {
 	for i := 0; i < 4; i++ {
 		pos += int(key.key[i])
 	}
-	// 764 - 128 - 4 //按照digest算法，并没有看到解析key的，key不用解析？
+
 	pos = (pos % 632) + 4
 
 	key.keyOffset = pos
 	key.random1 = data[0:pos]
 	key.key = data[pos : pos+128]
 	key.random2 = data[pos+128 : 760]
+	return key, nil
+}
+
+func makeHandshakeKeyBlock(data []byte) *keyBlock {
+	block := &keyBlock{}
+	block.offset = data[760:764]
+
+	rand.Read(block.offset)
+
+	pos := 0
+	for i := 0; i < 4; i++ {
+		pos += int(block.offset[i])
+	}
+	pos = (pos % 728) + 4
+
+	block.keyOffset = pos
+	block.random1 = data[:pos]
+	block.key = data[pos : pos+32]
+	block.random2 = data[pos+32:]
+
+	rand.Read(block.random1)
+	rand.Read(block.random2)
+	rand.Read(block.key)
+
+	return block
+}
+
+func makeHandshakeDigestBlock(data []byte) {
+
+	block := &digestBlock{}
+
+	block.offset = data[0:4]
+	rand.Read(block.offset)
+
+	pos := 0
+	for i := 0; i < 4; i++ {
+		pos += int(block.offset[i])
+	}
+	pos = (pos % 728) + 4
+
+	block.digestOffset = pos
+	block.random1 = data[:pos]
+	block.digest = data[pos : pos+32]
+	block.random2 = data[pos+32:]
+
+	rand.Read(block.random1)
+	rand.Read(block.random2)
+
+	sha256 := block.makeC1Digest()
+	copy(block.digest, sha256)
 	return
 }
-*/
 
-func parseHandshakeDigest(c1 []byte, schema int) (block *digestBlock) {
+func parseHandshakeDigestBlock(c1 []byte, schema int) (block *digestBlock) {
 	base := 8
 	blockData := c1[base : 764+base]
 	if schema == schema1 {
@@ -85,11 +135,11 @@ func parseHandshakeDigest(c1 []byte, schema int) (block *digestBlock) {
 		blockData = c1[base:1536]
 	}
 	block = &digestBlock{}
-	offset := blockData[0:4]
+	block.offset = blockData[0:4]
 
 	pos := 0
 	for i := 0; i < 4; i++ {
-		pos += int(offset[i])
+		pos += int(block.offset[i])
 	}
 	// 764 - 32 - 4
 	pos = (pos % 728) + 4 + base
@@ -98,6 +148,7 @@ func parseHandshakeDigest(c1 []byte, schema int) (block *digestBlock) {
 	block.random1 = c1[:pos]
 	block.digest = c1[pos : pos+32]
 	block.random2 = c1[pos+32:]
+
 	return
 }
 
@@ -129,7 +180,7 @@ func (digest *digestBlock) makeS2DigestKey() (s256 []byte) {
 	return h.Sum(nil)
 }
 
-func handshake(rw io.ReadWriter) (err error) {
+func handshakeServer(rw io.ReadWriter) (err error) {
 	var header [9]byte
 
 	C0 := header[:1] // C0就一个字节
@@ -218,7 +269,7 @@ func complexHandshakeC1CheckAndDigest(C1 []byte) (ok bool, block *digestBlock) {
 // schema0 time: 4bytes version:4bytes key:764bytes digest:764bytes
 // schema1 time: 4bytes version:4bytes digest:764bytes key:764bytes
 func complexHandshakeC1CheckAndDigestSchema(C1 []byte, shcema int) (ok bool, block *digestBlock) {
-	block = parseHandshakeDigest(C1, shcema)
+	block = parseHandshakeDigestBlock(C1, shcema)
 	s256 := block.makeC1Digest()
 
 	if bytes.Compare(block.digest, s256) != 0 {
@@ -238,7 +289,7 @@ func createComplexS1(s1 []byte) {
 	s1ver := uint32(0x0d0e0a0d)
 	byteio.PutU32BE(s1[4:8], s1ver)
 
-	block := parseHandshakeDigest(s1, schema0)
+	block := parseHandshakeDigestBlock(s1, schema0)
 	block.makeS1Digest()
 }
 
@@ -286,4 +337,54 @@ func simpleHandshake(rw io.ReadWriter, C1TimeAndVersion []byte) (err error) {
 	}
 	return
 
+}
+
+func makeC1(c1 []byte, schema int) {
+
+	byteio.PutU32BE(c1, 0)
+
+	base := 8
+	keyBlockData := c1[base : 764+base]
+	digestBlockData := c1[764+base:]
+
+	if schema == schema1 {
+		base = 764 + 8
+		digestBlockData = c1[base:1536]
+		keyBlockData = c1[8:base]
+	}
+
+	makeHandshakeKeyBlock(keyBlockData)
+	makeHandshakeDigestBlock(digestBlockData)
+
+	return
+}
+
+func HandshakeClient(rw io.ReadWriter) (err error) {
+
+	var random [(1 + 1536*2) * 2]byte
+
+	C0C1C2 := random[:1536*2+1]
+	C0 := C0C1C2[:1]
+	C1 := C0C1C2[1 : 1536+1]
+	C0C1 := C0C1C2[:1536+1]
+	C2 := C0C1C2[1536+1:]
+
+	S0S1S2 := random[1536*2+1:]
+
+	C0[0] = 3
+	makeC1(C1, schema1)
+	if _, err = rw.Write(C0C1); err != nil {
+		return
+	}
+
+	if _, err = io.ReadFull(rw, S0S1S2); err != nil {
+		return
+	}
+
+	//S1 := S0S1S2[1 : 1536+1] // TODO check s1
+
+	if _, err = rw.Write(C2); err != nil {
+		return
+	}
+	return
 }

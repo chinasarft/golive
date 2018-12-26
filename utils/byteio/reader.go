@@ -208,3 +208,35 @@ func ReadUint8(r io.Reader) (uint32, error) {
 
 	return uint32(b[0]), nil
 }
+
+func readFloat(r io.Reader, order binary.ByteOrder, f interface{}) error {
+	err := binary.Read(r, order, f)
+	if err != nil {
+		return fmt.Errorf("binary.Read failed:%s", err.Error())
+	}
+	return nil
+}
+
+func ReadFloat32BE(r io.Reader) (float32, error) {
+	var f float32
+	err := readFloat(r, binary.BigEndian, &f)
+	return f, err
+}
+
+func ReadFloat32LE(r io.Reader) (float32, error) {
+	var f float32
+	err := readFloat(r, binary.LittleEndian, &f)
+	return f, err
+}
+
+func ReadFloat64BE(r io.Reader) (float64, error) {
+	var f float64
+	err := readFloat(r, binary.BigEndian, &f)
+	return f, err
+}
+
+func ReadFloat64LE(r io.Reader) (float64, error) {
+	var f float64
+	err := readFloat(r, binary.LittleEndian, &f)
+	return f, err
+}

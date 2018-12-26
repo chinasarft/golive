@@ -15,6 +15,18 @@ var (
 
 )
 
+const (
+	TYPE_AUDIO                  = 8
+	TYPE_VIDEO                  = 9
+	TYPE_DATA_AMF0              = 0x12
+	TYPE_DATA_AMF3              = 0xf
+	TYPE_PRTCTRL_WINDOW_ACK     = 5
+	TYPE_PRTCTRL_SET_PEER_BW    = 6
+	TYPE_PRTCTRL_SET_CHUNK_SIZE = 1
+	TYPE_CMDMSG_AMF0            = 0x14
+	TYPE_CMDMSG_AMF3            = 0x11
+)
+
 type Message struct {
 	MessageType uint8  `type:int endian:big length:1`
 	Timestamp   uint32 `type:int endian:big length:4`
@@ -280,30 +292,30 @@ func NewPublishSuccessMessage() (*Message, error) {
 // 抓包来看, c->s s->c, 的message stream id 为1， 这个参数也为1，所以这里
 // 认为是相等的
 
-func NewUserControlCommandStreamBegin(stremid uint32) *Message {
+func NewUserControlCommandStreamBegin(functionalStreamId uint32) *Message {
 	message := &Message{
 		MessageType: 4,
 		Timestamp:   0,
-		StreamID:    stremid,
+		StreamID:    0,
 	}
 	message.Payload = make([]byte, 6)
 	message.Payload[0] = 0
 	message.Payload[1] = 0
-	byteio.PutU32BE(message.Payload[2:6], stremid)
+	byteio.PutU32BE(message.Payload[2:6], functionalStreamId)
 	return message
 }
 
 // 同StreamBegin
-func NewUserControlCommandStreamIsRecorded(stremid uint32) *Message {
+func NewUserControlCommandStreamIsRecorded(functionalStreamId uint32) *Message {
 	message := &Message{
 		MessageType: 4,
 		Timestamp:   0,
-		StreamID:    stremid,
+		StreamID:    0,
 	}
 	message.Payload = make([]byte, 6)
 	message.Payload[0] = 0
 	message.Payload[1] = 4
-	byteio.PutU32BE(message.Payload[2:6], stremid)
+	byteio.PutU32BE(message.Payload[2:6], functionalStreamId)
 	return message
 }
 
@@ -358,4 +370,178 @@ func NewNetStreamOnStatusMessageWithCodeLevelDesc(stremid uint32, code, level, d
 
 	message.Payload = data
 	return message, nil
+}
+
+func NewConnectMessage(obj amf.Object, transactionId int) (*Message, error) {
+
+	message := &Message{
+		MessageType: 0x14,
+		Timestamp:   0,
+		StreamID:    0,
+	}
+
+	var values []interface{}
+	values = append(values, "connect")
+	values = append(values, transactionId)
+	values = append(values, obj)
+
+	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
+	if err != nil {
+		return nil, err
+	}
+
+	message.Payload = data
+	return message, nil
+}
+
+func NewReleaseStreamMessage(transactionId int, streamName string) (*Message, error) {
+
+	message := &Message{
+		MessageType: 0x14,
+		Timestamp:   0,
+		StreamID:    0,
+	}
+
+	var values []interface{}
+	values = append(values, "releaseStream")
+	values = append(values, transactionId)
+	values = append(values, nil)
+	values = append(values, streamName)
+
+	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
+	if err != nil {
+		return nil, err
+	}
+
+	message.Payload = data
+	return message, nil
+}
+
+func NewFCPublishMessage(transactionId int, streamName string) (*Message, error) {
+
+	message := &Message{
+		MessageType: 0x14,
+		Timestamp:   0,
+		StreamID:    0,
+	}
+
+	var values []interface{}
+	values = append(values, "FCPublish")
+	values = append(values, transactionId)
+	values = append(values, nil)
+	values = append(values, streamName)
+
+	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
+	if err != nil {
+		return nil, err
+	}
+
+	message.Payload = data
+	return message, nil
+}
+
+func NewCreateStreamMessage(transactionId int) (*Message, error) {
+
+	message := &Message{
+		MessageType: 0x14,
+		Timestamp:   0,
+		StreamID:    0,
+	}
+
+	var values []interface{}
+	values = append(values, "createStream")
+	values = append(values, transactionId)
+	values = append(values, nil)
+
+	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
+	if err != nil {
+		return nil, err
+	}
+
+	message.Payload = data
+	return message, nil
+}
+
+func NewPublishMessage(transactionId int, appName, streamName string) (*Message, error) {
+	message := &Message{
+		MessageType: 0x14,
+		Timestamp:   0,
+		StreamID:    0,
+	}
+
+	var values []interface{}
+	values = append(values, "publish")
+	values = append(values, transactionId)
+	values = append(values, nil)
+	values = append(values, streamName)
+	values = append(values, appName)
+
+	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
+	if err != nil {
+		return nil, err
+	}
+
+	message.Payload = data
+	return message, nil
+}
+
+func NewGetStreamLengthMessage(transactionId int, streamName string) (*Message, error) {
+	message := &Message{
+		MessageType: 0x14,
+		Timestamp:   0,
+		StreamID:    0,
+	}
+
+	var values []interface{}
+	values = append(values, "getStreamLength")
+	values = append(values, transactionId)
+	values = append(values, nil)
+	values = append(values, streamName)
+
+	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
+	if err != nil {
+		return nil, err
+	}
+
+	message.Payload = data
+	return message, nil
+}
+
+func NewPlayMessage(transactionId int, streamName string, num int) (*Message, error) {
+	message := &Message{
+		MessageType: 0x14,
+		Timestamp:   0,
+		StreamID:    1, // TOD0 1根据ffmpeg抓包得来，应该随便填写的
+	}
+
+	var values []interface{}
+	values = append(values, "play")
+	values = append(values, transactionId)
+	values = append(values, nil)
+	values = append(values, streamName)
+	values = append(values, num)
+
+	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
+	if err != nil {
+		return nil, err
+	}
+
+	message.Payload = data
+	return message, nil
+}
+
+func NewSetBufferLengthMessage(functionalStreamId uint32, millisecond uint32) *Message {
+	message := &Message{
+		MessageType: 4,
+		Timestamp:   0,
+		StreamID:    0,
+	}
+	data := make([]byte, 10)
+	data[0] = 0
+	data[1] = 3 // event type setbufferlength
+
+	byteio.PutU32BE(data[2:6], functionalStreamId)
+	byteio.PutU32BE(data[6:10], millisecond)
+	message.Payload = data
+	return message
 }

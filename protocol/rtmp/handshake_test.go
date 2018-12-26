@@ -319,7 +319,7 @@ func TestCheckC1(t *testing.T) {
 	// }
 }
 
-func TestHandshake(t *testing.T) {
+func TestHandshakeServer(t *testing.T) {
 	c0c1c2 := make([]byte, len(testc0c1c2)/2)
 	_, err := hex.Decode(c0c1c2, []byte(testc0c1c2))
 	if err != nil {
@@ -328,11 +328,73 @@ func TestHandshake(t *testing.T) {
 
 	hs := newTestHandshakeer(c0c1c2)
 
-	err = handshake(hs)
+	err = handshakeServer(hs)
 	if err != nil {
 		t.Errorf("check C1 digest fail:")
 	} else {
 		log.Println("handshake ok")
 	}
 	return
+}
+
+type testConn struct {
+	achan chan byte
+	bchan chan byte
+}
+
+func newTestConn(achan, bchan chan byte) *testConn {
+	return &testConn{
+		achan: achan,
+		bchan: bchan,
+	}
+}
+
+func (c *testConn) Read(p []byte) (n int, err error) {
+	for i := 0; i < len(p); i++ {
+		p[i] = <-c.achan
+	}
+	log.Println("read", len(p), "byte")
+	return len(p), nil
+}
+
+func (c *testConn) Write(p []byte) (n int, err error) {
+	for i := 0; i < len(p); i++ {
+		c.bchan <- p[i]
+	}
+	log.Println("write", len(p), "byte")
+	return len(p), nil
+}
+
+func wrapHandshakeClient(c1 io.ReadWriter, errchan chan error) {
+	err := HandshakeClient(c1)
+	if err == nil {
+		log.Println("handshake client ok")
+		errchan <- nil
+	} else {
+		log.Println("handshake client fail:", err.Error())
+		errchan <- err
+	}
+}
+func TestHandshakeClient(t *testing.T) {
+	achan := make(chan byte, 1024*1024)
+	bchan := make(chan byte, 1024*1024)
+	c1 := newTestConn(achan, bchan)
+	c2 := newTestConn(bchan, achan)
+
+	errchan := make(chan error)
+
+	go wrapHandshakeClient(c1, errchan)
+
+	err := handshakeServer(c2)
+	if err == nil {
+		log.Println("handshake server ok")
+	} else {
+		t.Error("handshake server fail:", err.Error())
+	}
+
+	err = <-errchan
+
+	if err != nil {
+		t.Error("handshake client ok")
+	}
 }

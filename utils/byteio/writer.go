@@ -1,6 +1,9 @@
 package byteio
 
-import "io"
+import (
+	"encoding/binary"
+	"io"
+)
 
 func PutU8(b []byte, v uint32) {
 	b[0] = byte(v)
@@ -118,4 +121,20 @@ func WriteU64LE(r io.Writer, v uint64) {
 	b := make([]byte, 8)
 	PutU64LE(b, v)
 	r.Write(b[0:8])
+}
+
+func WriteFloat32BE(w io.Writer, f float32) error {
+	return binary.Write(w, binary.BigEndian, f)
+}
+
+func WriteFloat32LE(w io.Writer, f float32) error {
+	return binary.Write(w, binary.LittleEndian, f)
+}
+
+func WriteFloat64BE(w io.Writer, f float64) error {
+	return binary.Write(w, binary.BigEndian, f)
+}
+
+func WriteFloat64LE(w io.Writer, f float64) error {
+	return binary.Write(w, binary.LittleEndian, f)
 }

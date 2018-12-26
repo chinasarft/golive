@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	"github.com/chinasarft/golive/utils/amf"
+	"github.com/chinasarft/golive/utils/byteio"
 )
 
 type PutAVDMessage func(m *Message) error
@@ -92,7 +93,7 @@ func NewRtmpHandler(rw io.ReadWriter, pad Pad) *RtmpHandler {
 }
 
 func (h *RtmpHandler) Start() error {
-	err := handshake(h.rw)
+	err := handshakeServer(h.rw)
 	if err != nil {
 		h.handleShakeFail()
 		log.Println("rtmp HandshakeServer err:", err)
@@ -164,13 +165,15 @@ func (h *RtmpHandler) Cancel() {
 }
 
 func (h *RtmpHandler) handleProtocolControlMessaage(m *ProtocolControlMessaage) error {
+
 	switch m.MessageType {
-	case 1:
-		h.chunkUnpacker.SetChunkSize(1024) // TODO 先设置成1024
+	case TYPE_PRTCTRL_SET_CHUNK_SIZE:
+		chunkSize := byteio.U32BE(m.Payload)
+		h.chunkUnpacker.SetChunkSize(chunkSize)
 	case 2:
 	case 3:
-	case 5:
-	case 6:
+	case TYPE_PRTCTRL_WINDOW_ACK:
+	case TYPE_PRTCTRL_SET_PEER_BW:
 	}
 	return nil
 }
@@ -426,7 +429,7 @@ func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 	w := &bytes.Buffer{}
 
 	ackMsg := NewAckMessage(2500000)
-	chunkArray, err := h.MessageToChunk(ackMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err := h.chunkPacker.MessageToChunk(ackMsg)
 	if err != nil {
 		return err
 	}
@@ -436,7 +439,7 @@ func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 	}
 
 	setPeerBandwidthMsg := NewSetPeerBandwidthMessage(2500000, 2)
-	chunkArray, err = h.MessageToChunk(setPeerBandwidthMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err = h.chunkPacker.MessageToChunk(setPeerBandwidthMsg)
 	if err != nil {
 		return err
 	}
@@ -455,7 +458,7 @@ func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 	h.chunkPacker.SetChunkSize(1024)
 
 	setChunkMsg := NewSetChunkSizeMessage(h.chunkPacker.GetChunkSize())
-	chunkArray, err = h.MessageToChunk(setChunkMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err = h.chunkPacker.MessageToChunk(setChunkMsg)
 	if err != nil {
 		return err
 	}
@@ -468,7 +471,7 @@ func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 	if err != nil {
 		return err
 	}
-	chunkArray, err = h.MessageToChunk(connectOkMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err = h.chunkPacker.MessageToChunk(connectOkMsg)
 	if err != nil {
 		return err
 	}
@@ -510,7 +513,7 @@ func (h *RtmpHandler) handleCreateStreamCommand(r amf.Reader) error {
 	if err != nil {
 		return err
 	}
-	chunkArray, err := h.MessageToChunk(createStreamMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err := h.chunkPacker.MessageToChunk(createStreamMsg)
 	if err != nil {
 		return err
 	}
@@ -628,7 +631,7 @@ func (h *RtmpHandler) handlePublishCommand(r amf.Reader) error {
 	if err != nil {
 		return err
 	}
-	chunkArray, err := h.MessageToChunk(publishOkMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err := h.chunkPacker.MessageToChunk(publishOkMsg)
 	if err != nil {
 		return err
 	}
@@ -735,7 +738,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 		case 0:
 			if transId, ok := v.(float64); ok {
 				transactionId = int(transId)
-				log.Println("publish transactionId:", transactionId) //7.2.11 always set to 1
+				log.Println("play transactionId:", transactionId) //7.2.11 always set to 1
 			} else {
 				panic("transactionId not number")
 			}
@@ -753,8 +756,8 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 	w := &bytes.Buffer{}
 	h.functionalStreamId = m.StreamID
 
-	streamIsRecordedMsg := NewUserControlCommandStreamIsRecorded(m.StreamID) // 这个streamid 应该没啥用
-	chunkArray, err := h.MessageToChunk(streamIsRecordedMsg, h.chunkPacker.sendChunkSize)
+	streamIsRecordedMsg := NewUserControlCommandStreamIsRecorded(h.functionalStreamId) // 这个streamid 应该没啥用
+	chunkArray, err := h.chunkPacker.MessageToChunk(streamIsRecordedMsg)
 	if err != nil {
 		return err
 	}
@@ -764,7 +767,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 	}
 
 	streamBeginMsg := NewUserControlCommandStreamBegin(m.StreamID) // 这个streamid 应该也没啥用
-	chunkArray, err = h.MessageToChunk(streamBeginMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err = h.chunkPacker.MessageToChunk(streamBeginMsg)
 	if err != nil {
 		return err
 	}
@@ -774,7 +777,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 	}
 
 	playResetMsg, _ := NewPlayResetMessage(m.StreamID) // 这个streamid 应该也没啥用
-	chunkArray, err = h.MessageToChunk(playResetMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err = h.chunkPacker.MessageToChunk(playResetMsg)
 	if err != nil {
 		return err
 	}
@@ -790,7 +793,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 
 	w.Reset()
 	playStartMsg, _ := NewPlayStartMessage(m.StreamID)
-	chunkArray, err = h.MessageToChunk(playStartMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err = h.chunkPacker.MessageToChunk(playStartMsg)
 	if err != nil {
 		return err
 	}
@@ -806,7 +809,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 
 	w.Reset()
 	dataStartMsg, _ := NewDataStartMessage(m.StreamID)
-	chunkArray, err = h.MessageToChunk(dataStartMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err = h.chunkPacker.MessageToChunk(dataStartMsg)
 	if err != nil {
 		return err
 	}
@@ -822,7 +825,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 
 	w.Reset()
 	playPublishNotifyStartMsg, _ := NewPlayPublishNotifyMessage(m.StreamID)
-	chunkArray, err = h.MessageToChunk(playPublishNotifyStartMsg, h.chunkPacker.sendChunkSize)
+	chunkArray, err = h.chunkPacker.MessageToChunk(playPublishNotifyStartMsg)
 	if err != nil {
 		return err
 	}
@@ -843,7 +846,7 @@ func (h *RtmpHandler) WriteMessage(m *Message) error {
 
 	w := &bytes.Buffer{}
 
-	chunkArray, err := h.MessageToChunk(m, h.chunkPacker.sendChunkSize)
+	chunkArray, err := h.chunkPacker.MessageToChunk(m)
 	if err != nil {
 		return err
 	}
@@ -858,33 +861,6 @@ func (h *RtmpHandler) WriteMessage(m *Message) error {
 	}
 
 	return err
-}
-
-// m是一个完整的消息，这个函数会拆分成chunk
-func (s *RtmpHandler) MessageToChunk(m *Message, chunkSize uint32) ([]*Chunk, error) {
-
-	csid := 2
-	switch m.MessageType {
-	case 1, 2, 3, 5, 6:
-		if m.StreamID != 0 {
-			return nil, fmt.Errorf("send msg streamid:%d for prot ctrl msg", m.StreamID)
-		}
-		csid = 2
-	case 17, 20:
-		csid = 3
-	case 15, 18: // data message
-		csid = 4
-	case 9:
-		csid = 6 // TODO csid怎么选择?
-	case 8:
-		csid = 4
-	case 4:
-		csid = 8
-	}
-
-	chunkArray, err := m.ToType0Chunk(uint32(csid), chunkSize)
-
-	return chunkArray, err
 }
 
 func (h *RtmpHandler) handleSetDataFrame(r amf.Reader, m *DataMessage) error {
@@ -933,4 +909,17 @@ func (h *RtmpHandler) handleSetDataFrame(r amf.Reader, m *DataMessage) error {
 	}
 
 	return nil
+}
+
+// --------------
+func NewClientRtmpHandler(rw io.ReadWriter) *RtmpHandler {
+	return &RtmpHandler{
+		chunkUnpacker: NewChunkUnpacker(),
+		chunkPacker:   NewChunkPacker(),
+		rw:            rw,
+	}
+}
+
+func (h *RtmpHandler) GetRtmpMessage() (*Message, error) {
+	return h.chunkUnpacker.getRtmpMessage(h.rw)
 }

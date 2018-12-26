@@ -345,7 +345,7 @@ func (src *Source) connectSink(msg *PadMessage) {
 
 	if src.AACSequenceHeader != nil {
 		amsg := &rtmp.Message{
-			MessageType: 8,
+			MessageType: rtmp.TYPE_AUDIO,
 			Timestamp:   0,
 			StreamID:    sink.GetFunctionalStreamId(),
 			Payload:     src.AACSequenceHeader,
@@ -356,7 +356,7 @@ func (src *Source) connectSink(msg *PadMessage) {
 
 	if src.VideoDecoderConfigurationRecord != nil {
 		vmsg := &rtmp.Message{
-			MessageType: 9,
+			MessageType: rtmp.TYPE_VIDEO,
 			Timestamp:   0,
 			StreamID:    sink.GetFunctionalStreamId(),
 			Payload:     src.VideoDecoderConfigurationRecord,
