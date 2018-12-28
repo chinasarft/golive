@@ -372,7 +372,7 @@ func NewNetStreamOnStatusMessageWithCodeLevelDesc(stremid uint32, code, level, d
 	return message, nil
 }
 
-func NewConnectMessage(obj amf.Object, transactionId int) (*Message, error) {
+func NewConnectMessage(obj amf.Object) (*Message, error) {
 
 	message := &Message{
 		MessageType: 0x14,
@@ -382,7 +382,7 @@ func NewConnectMessage(obj amf.Object, transactionId int) (*Message, error) {
 
 	var values []interface{}
 	values = append(values, "connect")
-	values = append(values, transactionId)
+	values = append(values, 1)
 	values = append(values, obj)
 
 	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
@@ -394,7 +394,7 @@ func NewConnectMessage(obj amf.Object, transactionId int) (*Message, error) {
 	return message, nil
 }
 
-func NewReleaseStreamMessage(transactionId int, streamName string) (*Message, error) {
+func NewReleaseStreamMessage(transactionId uint32, streamName string) (*Message, error) {
 
 	message := &Message{
 		MessageType: 0x14,
@@ -417,7 +417,7 @@ func NewReleaseStreamMessage(transactionId int, streamName string) (*Message, er
 	return message, nil
 }
 
-func NewFCPublishMessage(transactionId int, streamName string) (*Message, error) {
+func NewFCPublishMessage(transactionId uint32, streamName string) (*Message, error) {
 
 	message := &Message{
 		MessageType: 0x14,
@@ -440,7 +440,7 @@ func NewFCPublishMessage(transactionId int, streamName string) (*Message, error)
 	return message, nil
 }
 
-func NewCreateStreamMessage(transactionId int) (*Message, error) {
+func NewCreateStreamMessage(transactionId uint32, cmdObj amf.Object) (*Message, error) {
 
 	message := &Message{
 		MessageType: 0x14,
@@ -452,6 +452,9 @@ func NewCreateStreamMessage(transactionId int) (*Message, error) {
 	values = append(values, "createStream")
 	values = append(values, transactionId)
 	values = append(values, nil)
+	if cmdObj != nil {
+		values = append(values, cmdObj)
+	}
 
 	data, err := amf.WriteArrayAsSiblingButElemArrayAsObject(values)
 	if err != nil {
@@ -462,7 +465,7 @@ func NewCreateStreamMessage(transactionId int) (*Message, error) {
 	return message, nil
 }
 
-func NewPublishMessage(transactionId int, appName, streamName string) (*Message, error) {
+func NewPublishMessage(transactionId uint32, appName, streamName string) (*Message, error) {
 	message := &Message{
 		MessageType: 0x14,
 		Timestamp:   0,
@@ -485,7 +488,7 @@ func NewPublishMessage(transactionId int, appName, streamName string) (*Message,
 	return message, nil
 }
 
-func NewGetStreamLengthMessage(transactionId int, streamName string) (*Message, error) {
+func NewGetStreamLengthMessage(transactionId uint32, streamName string) (*Message, error) {
 	message := &Message{
 		MessageType: 0x14,
 		Timestamp:   0,
@@ -507,7 +510,7 @@ func NewGetStreamLengthMessage(transactionId int, streamName string) (*Message, 
 	return message, nil
 }
 
-func NewPlayMessage(transactionId int, streamName string, num int) (*Message, error) {
+func NewPlayMessage(transactionId uint32, streamName string, num int) (*Message, error) {
 	message := &Message{
 		MessageType: 0x14,
 		Timestamp:   0,
@@ -530,7 +533,7 @@ func NewPlayMessage(transactionId int, streamName string, num int) (*Message, er
 	return message, nil
 }
 
-func NewSetBufferLengthMessage(functionalStreamId uint32, millisecond uint32) *Message {
+func NewSetBufferLengthMessage(functionalStreamId uint32, millisecond int) *Message {
 	message := &Message{
 		MessageType: 4,
 		Timestamp:   0,
@@ -541,7 +544,7 @@ func NewSetBufferLengthMessage(functionalStreamId uint32, millisecond uint32) *M
 	data[1] = 3 // event type setbufferlength
 
 	byteio.PutU32BE(data[2:6], functionalStreamId)
-	byteio.PutU32BE(data[6:10], millisecond)
+	byteio.PutU32BE(data[6:10], uint32(millisecond))
 	message.Payload = data
 	return message
 }

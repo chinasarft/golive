@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math/rand"
@@ -14,7 +15,9 @@ import (
 type ConnClient struct {
 	rtmpUrl     string
 	conn        net.Conn
-	rtmpHandler *rtmp.RtmpPlayHandler
+	rtmpHandler *rtmp.RtmpClientHandler
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 func (connClient *ConnClient) Start(rtmpUrl string) error {
@@ -72,19 +75,22 @@ func (connClient *ConnClient) Start(rtmpUrl string) error {
 	log.Println("connection:", "local:", conn.LocalAddr(), "remote:", conn.RemoteAddr())
 
 	connClient.conn = conn
-	rtmpHandler, err := rtmp.NewRtmpPlayHandler(conn, rtmpUrl, connClient)
+	rtmpHandler, err := rtmp.NewRtmpClientHandler(conn, rtmpUrl, rtmp.ROLE_PLAY, connClient)
 	if err != nil {
 		conn.Close()
 		return err
 	}
 	connClient.rtmpHandler = rtmpHandler
 
-	go connClient.rtmpHandler.Start()
+	connClient.ctx, connClient.cancel = context.WithCancel(context.Background())
+	go connClient.rtmpHandler.Start(connClient.ctx)
 
 	return nil
 }
 
 func (connClient *ConnClient) OnError(err error) {
+	log.Println("OnError in player")
+	connClient.cancel()
 	return
 }
 
@@ -107,5 +113,7 @@ func main() {
 	log.SetFlags(log.Ldate | log.Lmicroseconds | log.Lshortfile)
 	player := &ConnClient{}
 	log.Println(player.Start("rtmp://127.0.0.1/live/t1"))
-	select {}
+	select {
+	case <-player.ctx.Done():
+	}
 }

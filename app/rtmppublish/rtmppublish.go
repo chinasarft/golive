@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/chinasarft/golive/protocol/rtmp"
 )
@@ -14,7 +17,9 @@ import (
 type ConnClient struct {
 	rtmpUrl     string
 	conn        net.Conn
-	rtmpHandler *rtmp.RtmpPublishHandler
+	rtmpHandler *rtmp.RtmpClientHandler
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 func (connClient *ConnClient) Start(rtmpUrl string) error {
@@ -72,14 +77,15 @@ func (connClient *ConnClient) Start(rtmpUrl string) error {
 	log.Println("connection:", "local:", conn.LocalAddr(), "remote:", conn.RemoteAddr())
 
 	connClient.conn = conn
-	rtmpHandler, err := rtmp.NewRtmpPublishHandler(conn, rtmpUrl)
+	rtmpHandler, err := rtmp.NewRtmpClientHandler(conn, rtmpUrl, rtmp.ROLE_PUBLISH, nil)
 	if err != nil {
 		conn.Close()
 		return err
 	}
 	connClient.rtmpHandler = rtmpHandler
 
-	go connClient.rtmpHandler.Start()
+	connClient.ctx, connClient.cancel = context.WithCancel(context.Background())
+	go connClient.rtmpHandler.Start(connClient.ctx)
 
 	return nil
 }
@@ -103,10 +109,53 @@ func (connClient *ConnClient) OnDataMessage(m *rtmp.DataMessage) {
 	return
 }
 
+func (connClient *ConnClient) readAndSend(ctx context.Context) {
+	var err error
+
+	defer func() {
+		if err != nil {
+			log.Println(err)
+			connClient.cancel()
+			return
+		}
+	}()
+
+	var pVideoData []byte
+	var videoBuf []byte
+	if audioBuf, err = ioutil.ReadFile("a.aac"); err != nil {
+		return
+	}
+
+	if pVideoData, err = ioutil.ReadFile("a.h264"); err != nil {
+		return
+	}
+
+	ctx, _ = context.WithCancel(ctx)
+	bAudioOk := true
+	bVideoOk := true
+
+	nSysTimeBase := time.Now().UnixNano() / 1e6
+	nNextAudioTime := nSysTimeBase
+	nNextVideoTime := nSysTimeBase
+	nNow := nSysTimeBase
+
+	for {
+		select {
+		case <-ctx.Done():
+		default:
+		}
+	}
+
+	return
+}
+
 func main() {
 	log.SetFlags(log.Ldate | log.Lmicroseconds | log.Lshortfile)
 	player := &ConnClient{}
 	log.Println(player.Start("rtmp://127.0.0.1/live/t1"))
-	// TODO
-	select {}
+
+	go readAndSend(player.ctx)
+	select {
+	case <-player.ctx.Done():
+	}
 }

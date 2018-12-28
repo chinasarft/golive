@@ -234,3 +234,22 @@ func (p *ChunkPacker) MessageToChunk(m *Message) ([]*Chunk, error) {
 
 	return chunkArray, err
 }
+
+func (p *ChunkPacker) WriteMessage(w io.Writer, m *Message) error {
+
+	wBuf := &bytes.Buffer{}
+
+	chunkArray, err := p.MessageToChunk(m)
+	if err != nil {
+		return err
+	}
+	err = p.SerializerChunk(chunkArray, wBuf)
+	if err != nil {
+		return err
+	}
+
+	data := wBuf.Bytes()
+	_, err = w.Write(data)
+
+	return err
+}

@@ -32,24 +32,6 @@ type PlayCmdParam struct {
 	Reset      bool
 }
 
-const (
-	rtmp_state_init = iota
-	rtmp_state_hand_fail
-	rtmp_state_hand_success
-	rtmp_state_connect_success
-	rtmp_state_connect_fail
-	rtmp_state_crtstrm_success
-	rtmp_state_crtstrm_fail
-
-	rtmp_state_publish_success
-	rtmp_state_publish_fail
-
-	rtmp_state_play_success
-	rtmp_state_play_fail
-
-	rtmp_state_stop
-)
-
 var (
 	rtmp_codec_h264 int = 7
 	rtmp_codec_h265 int = 0x1c
@@ -95,11 +77,11 @@ func NewRtmpHandler(rw io.ReadWriter, pad Pad) *RtmpHandler {
 func (h *RtmpHandler) Start() error {
 	err := handshakeServer(h.rw)
 	if err != nil {
-		h.handleShakeFail()
 		log.Println("rtmp HandshakeServer err:", err)
 		return err
 	}
-	h.handleShakeSuccess()
+	h.status = rtmp_state_hand_success
+
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	for {
 		msg, err := h.chunkUnpacker.getRtmpMessage(h.rw)
@@ -129,6 +111,7 @@ func (h *RtmpHandler) Start() error {
 			h.stop()
 			return err
 		}
+
 	}
 
 }
@@ -139,14 +122,6 @@ func (h *RtmpHandler) GetAppStreamKey() string {
 
 func (h *RtmpHandler) GetFunctionalStreamId() uint32 {
 	return h.functionalStreamId
-}
-
-func (h *RtmpHandler) handleShakeSuccess() {
-	h.status = rtmp_state_hand_success
-}
-
-func (h *RtmpHandler) handleShakeFail() {
-	h.status = rtmp_state_hand_fail
 }
 
 func (h *RtmpHandler) stop() {
@@ -258,7 +233,7 @@ func (h *RtmpHandler) handleCommandMessage(m *CommandMessage) (err error) {
 						}
 					}
 					if err == nil {
-						h.status = rtmp_state_play_success
+						h.status = rtmp_state_play_start
 					} else {
 						h.status = rtmp_state_play_fail
 					}
@@ -356,45 +331,6 @@ func (h *RtmpHandler) handleAggregateMessage(m *AggregateMessage) error {
 	return nil
 }
 
-/*
-
-connect request:
-    +----------------+---------+---------------------------------------+
-    |  Field Name    |  Type   |           Description                 |
-    +--------------- +---------+---------------------------------------+
-    | Command Name   | String  | Name of the command. Set to "connect".|
-    +----------------+---------+---------------------------------------+
-    | Transaction ID | Number  | Always set to 1.                      |
-    +----------------+---------+---------------------------------------+
-    | Command Object | Object  | Command information object which has  |
-    |                |         | the name-value pairs.                 |
-    +----------------+---------+---------------------------------------+
-    | Optional User  | Object  | Any optional information              |
-    | Arguments      |         |                                       |
-    +----------------+---------+---------------------------------------+
-
-connect response:
-+--------------+----------+----------------------------------------+
-| Field Name   |     Type |           Description                  |
-+--------------+----------+----------------------------------------+
-| Command Name |  String  | _result or _error; indicates whether   |
-|              |          | the response is result or error.       |
-+--------------+----------+----------------------------------------+
-| Transaction  |  Number  |     Transaction ID is 1 for connect    |
-|      ID      |          |       responses                        |
-+--------------+----------+----------------------------------------+
-|  Properties  |  Object  |    Name-value pairs that describe the  |
-|              |          | properties(fmsver etc.) of the         |
-|              |          |      connection.                       |
-+--------------+----------+----------------------------------------+
-| Information  |  Object  |    Name-value pairs that describe the  |
-|              |          | response from|the server. ’code’,      |
-|              |          | ’level’, ’description’ are names of few|
-|              |          | among such information.                |
-+--------------+----------+----------------------------------------+
-
-	Command Name已经被处理掉了
-*/
 func (h *RtmpHandler) handleConnectCommand(r amf.Reader) error {
 	if h.status != rtmp_state_hand_success {
 		panic("handle connect in wrong state")
@@ -645,84 +581,6 @@ func (h *RtmpHandler) handlePublishCommand(r amf.Reader) error {
 	return err
 }
 
-/*
-+--------------+----------+-----------------------------------------+
-| Field Name   |   Type   |             Description                 |
-+--------------+----------+-----------------------------------------+
-| Command Name |  String  | Name of the command. Set to "play".     |
-+--------------+----------+-----------------------------------------+
-| Transaction  |  Number  | Transaction ID set to 0.                |
-| ID           |          |                                         |
-+--------------+----------+-----------------------------------------+
-| Command      |   Null   | Command information does not exist.     |
-| Object       |          | Set to null type.                       |
-+--------------+----------+-----------------------------------------+
-| Stream Name  |  String  | Name of the stream to play.             |
-|              |          | To play video (FLV) files, specify the  |
-|              |          | name of the stream without a file       |
-|              |          | extension (for example, "sample"). To   |
-|              |          | play back MP3 or ID3 tags, you must     |
-|              |          | precede the stream name with mp3:       |
-|              |          | (for example, "mp3:sample". To play     |
-|              |          | H.264/AAC files, you must precede the   |
-|              |          | stream name with mp4: and specify the   |
-|              |          | file extension. For example, to play the|
-|              |          | file sample.m4v,specify "mp4:sample.m4v"|
-|              |          |                                         |
-+--------------+----------+-----------------------------------------+
-|     Start    |  Number  |   An optional parameter that specifies  |
-|              |          | the start time in seconds. The default  |
-|              |          | value is -2, which means the subscriber |
-|              |          | first tries to play the live stream     |
-|              |          | specified in the Stream Name field. If a|
-|              |          | live stream of that name is not found,it|
-|              |          | plays the recorded stream of the same   |
-|              |          | name. If there is no recorded stream    |
-|              |          | with that name, the subscriber waits for|
-|              |          | a new live stream with that name and    |
-|              |          | plays it when available. If you pass -1 |
-|              |          | in the Start field, only the live stream|
-|              |          | specified in the Stream Name field is   |
-|              |          | played. If you pass 0 or a positive     |
-|              |          | number in the Start field, a recorded   |
-|              |          | stream specified in the Stream Name     |
-|              |          | field is played beginning from the time |
-|              |          | specified in the Start field. If no     |
-|              |          | recorded stream is found, the next item |
-|              |          | in the playlist is played.              |
-|              |          |                                         |
-+--------------+----------+-----------------------------------------+
-|   Duration   |  Number  | An optional parameter that specifies the|
-|              |          | duration of playback in seconds. The    |
-|              |          | default value is -1. The -1 value means |
-|              |          | a live stream is played until it is no  |
-|              |          | longer available or a recorded stream is|
-|              |          | played until it ends. If you pass 0, it |
-|              |          | plays the single frame since the time   |
-|              |          | specified in the Start field from the   |
-|              |          | beginning of a recorded stream. It is   |
-|              |          | assumed that the value specified in     |
-|              |          | the Start field is equal to or greater  |
-|              |          | than 0. If you pass a positive number,  |
-|              |          | it plays a live stream for              |
-|              |          | the time period specified in the        |
-|              |          | Duration field. After that it becomes   |
-|              |          | available or plays a recorded stream    |
-|              |          | for the time specified in the Duration  |
-|              |          | field. (If a stream ends before the     |
-|              |          | time specified in the Duration field,   |
-|              |          | playback ends when the stream ends.)    |
-|              |          | If you pass a negative number other     |
-|              |          | than -1 in the Duration field, it       |
-|              |          | interprets the value as if it were -1.  |
-|              |          |                                         |
-+--------------+----------+-----------------------------------------+
-| Reset        | Boolean  | An optional Boolean value or number     |
-|              |          | that specifies whether to flush any     |
-|              |          | previous playlist.                      |
-+--------------+----------+-----------------------------------------+
-*/
-
 func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 	transactionId := 0
 	for i := 0; ; i++ {
@@ -844,23 +702,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 
 func (h *RtmpHandler) WriteMessage(m *Message) error {
 
-	w := &bytes.Buffer{}
-
-	chunkArray, err := h.chunkPacker.MessageToChunk(m)
-	if err != nil {
-		return err
-	}
-	err = h.chunkPacker.SerializerChunk(chunkArray, w)
-	if err != nil {
-		return err
-	}
-
-	_, err = h.rw.Write(w.Bytes())
-	if err != nil {
-		return err
-	}
-
-	return err
+	return h.chunkPacker.WriteMessage(h.rw, m)
 }
 
 func (h *RtmpHandler) handleSetDataFrame(r amf.Reader, m *DataMessage) error {
@@ -909,17 +751,4 @@ func (h *RtmpHandler) handleSetDataFrame(r amf.Reader, m *DataMessage) error {
 	}
 
 	return nil
-}
-
-// --------------
-func NewClientRtmpHandler(rw io.ReadWriter) *RtmpHandler {
-	return &RtmpHandler{
-		chunkUnpacker: NewChunkUnpacker(),
-		chunkPacker:   NewChunkPacker(),
-		rw:            rw,
-	}
-}
-
-func (h *RtmpHandler) GetRtmpMessage() (*Message, error) {
-	return h.chunkUnpacker.getRtmpMessage(h.rw)
 }

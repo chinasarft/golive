@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"strings"
 
 	"github.com/chinasarft/golive/utils/amf"
 	"github.com/chinasarft/golive/utils/byteio"
+)
+
+const (
+	ROLE_PUBLISH = "publish"
+	ROLE_PLAY    = "play"
 )
 
 type Play interface {
@@ -19,47 +23,48 @@ type Play interface {
 	OnDataMessage(m *DataMessage)
 }
 
-type RtmpPlayHandler struct {
+type RtmpClientHandler struct {
 	chunkUnpacker      *ChunkUnpacker
 	chunkPacker        *ChunkPacker
 	rw                 io.ReadWriter
 	txMsgChan          chan *Message
 	ctx                context.Context
-	cancel             context.CancelFunc
-	appName            string
-	streamName         string
-	tcurl              string
+	rtmpUrl            *RtmpUrl
 	status             int
-	transactionId      int
+	transactionId      uint32
 	functionalStreamId uint32
 	player             Play
+	role               string
 }
 
-func NewRtmpPlayHandler(rw io.ReadWriter, url string, player Play) (*RtmpPlayHandler, error) {
-	if strings.Index(url, "rtmp://") != 0 {
-		return nil, fmt.Errorf("not corrent rtmp url")
+func NewRtmpClientHandler(rw io.ReadWriter, url, role string, player Play) (*RtmpClientHandler, error) {
+	if role != ROLE_PLAY && role != ROLE_PUBLISH {
+		return nil, fmt.Errorf("no such role:%s", role)
 	}
-	parts := strings.Split(url, "/")
+	if role == ROLE_PLAY && player == nil {
+		return nil, fmt.Errorf("player need Play interface")
+	}
+	rtmpUrl, err := parseRtmpUrl(url)
+	if err != nil {
+		return nil, err
+	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	ch := &RtmpPlayHandler{
+	ch := &RtmpClientHandler{
 		chunkUnpacker: NewChunkUnpacker(),
 		chunkPacker:   NewChunkPacker(),
 		rw:            rw,
 		txMsgChan:     make(chan *Message),
-		ctx:           ctx,
-		cancel:        cancel,
 		status:        rtmp_state_init,
 		transactionId: 1,
 		player:        player,
+		rtmpUrl:       rtmpUrl,
+		role:          role,
 	}
-	ch.appName = parts[3]
-	ch.streamName = parts[4]
-	ch.tcurl = strings.Join(parts[0:4], "/")
+
 	return ch, nil
 }
 
-func (h *RtmpPlayHandler) Start() {
+func (h *RtmpClientHandler) Start(ctx context.Context) {
 	var err error
 	defer func() {
 		if err != nil {
@@ -73,19 +78,21 @@ func (h *RtmpPlayHandler) Start() {
 		return
 	}
 
-	err = h.sendConnectMessage()
+	err = sendConnectMessage(h.rw, h.chunkPacker, h.rtmpUrl.getConnectCmdObj())
 	if err != nil {
 		log.Println("sendConnectMessage err:", err)
 		return
 	}
 	h.status = rtmp_state_connect_send
 
+	h.ctx, _ = context.WithCancel(ctx)
+
 	for {
 		select {
 		case <-h.ctx.Done():
 			return
 		case txmsg := <-h.txMsgChan:
-			if err = h.sendAVDMessage(txmsg); err != nil {
+			if err = h.sendMessage(txmsg); err != nil {
 				log.Println(err)
 				return
 			}
@@ -104,23 +111,7 @@ func (h *RtmpPlayHandler) Start() {
 	}
 }
 
-func (h *RtmpPlayHandler) sendConnectMessage() error {
-	event := make(amf.Object)
-	event["app"] = h.appName
-	event["type"] = "nonprivate"
-	event["flashVer"] = "FMS.3.1"
-	event["tcUrl"] = h.tcurl
-
-	msg, err := NewConnectMessage(event, h.transactionId)
-	if err != nil {
-		return err
-	}
-	h.transactionId += 1
-
-	return h.WriteMessage(msg)
-}
-
-func (h *RtmpPlayHandler) handleReceiveMessage(msg *Message) (err error) {
+func (h *RtmpClientHandler) handleReceiveMessage(msg *Message) (err error) {
 
 	switch msg.MessageType {
 	case 1, 2, 3, 5, 6:
@@ -144,21 +135,11 @@ func (h *RtmpPlayHandler) handleReceiveMessage(msg *Message) (err error) {
 	return
 }
 
-func (h *RtmpPlayHandler) handleShakeSuccess() {
-	h.status = rtmp_state_hand_success
-}
-
-func (h *RtmpPlayHandler) handleShakeFail() {
-	h.status = rtmp_state_hand_fail
-}
-
-func (h *RtmpPlayHandler) Cancel() {
-
-	h.cancel()
+func (h *RtmpClientHandler) Cancel() {
 	h.status = rtmp_state_stop
 }
 
-func (h *RtmpPlayHandler) handleProtocolControlMessaage(m *ProtocolControlMessaage) error {
+func (h *RtmpClientHandler) handleProtocolControlMessaage(m *ProtocolControlMessaage) error {
 
 	switch m.MessageType {
 	case TYPE_PRTCTRL_SET_CHUNK_SIZE:
@@ -173,11 +154,15 @@ func (h *RtmpPlayHandler) handleProtocolControlMessaage(m *ProtocolControlMessaa
 	return nil
 }
 
-func (h *RtmpPlayHandler) handleUserControlMessage(m *UserControlMessage) error {
+func (h *RtmpClientHandler) handleUserControlMessage(m *UserControlMessage) error {
 	eventType := int(m.Payload[0])*256 + int(m.Payload[1])
 	switch eventType {
 	case 0: // StreamBegin
+		if h.status != rtmp_state_stream_is_record {
+			return fmt.Errorf("not int stream_is_record state")
+		}
 		log.Println("OnUserControlMessage:StreamBegin")
+		h.status = rtmp_state_stream_begin
 	case 1: // StreamEOF
 		log.Println("OnUserControlMessage:StreamEOF")
 	case 2: // StreamDry
@@ -185,7 +170,11 @@ func (h *RtmpPlayHandler) handleUserControlMessage(m *UserControlMessage) error 
 	case 3: // SetBufferLength
 		log.Println("OnUserControlMessage:SetBufferLength")
 	case 4: // StreamIsRecorded
+		if h.status != rtmp_state_play_send {
+			return fmt.Errorf("not int play_send state")
+		}
 		log.Println("OnUserControlMessage:StreamIsRecorded")
+		h.status = rtmp_state_stream_is_record
 	case 6: // PingRequest
 		log.Println("OnUserControlMessage:PingRequest")
 	case 7: // PingResponse
@@ -194,58 +183,105 @@ func (h *RtmpPlayHandler) handleUserControlMessage(m *UserControlMessage) error 
 	return nil
 }
 
-func (h *RtmpPlayHandler) handleCommandMessage(m *CommandMessage) (err error) {
+func (h *RtmpClientHandler) handleCommandMessage(m *CommandMessage) (err error) {
 	switch m.MessageType {
 	case 17: //AMF3
 		fallthrough
 	case 20: //AMF0
 		switch h.status {
 		case rtmp_state_connect_send:
-			err = h.handleConnectResponse(m)
+			err = handleConnectResponse(m)
 			if err != nil {
 				log.Println(err)
 				return
 			}
 			h.status = rtmp_state_connect_success
 			log.Println("rtmp_state_connect_success")
-			err = h.sendWidowAckMessage()
+
+			h.chunkPacker.SetChunkSize(1024)
+			err = sendSetChunkMessage(h.rw, h.chunkPacker, 1024)
 			if err != nil {
 				return
 			}
 
-			err = h.sendCreateStreamMessage()
+			if h.role == ROLE_PLAY {
+				err = sendWidowAckMessage(h.rw, h.chunkPacker, 2500000)
+				if err != nil {
+					return
+				}
+			} else {
+				err = sendReleaseStreamMessage(h.rw, h.chunkPacker, h.transactionId, h.rtmpUrl.streamName)
+				if err != nil {
+					return
+				}
+				h.transactionId++
+
+				err = sendFCPublishMessage(h.rw, h.chunkPacker, h.transactionId, h.rtmpUrl.streamName)
+				if err != nil {
+					return
+				}
+				h.transactionId++
+			}
+
+			err = sendCreateStreamMessage(h.rw, h.chunkPacker, h.transactionId, nil)
 			if err != nil {
 				return
 			}
+			h.transactionId++
 			h.status = rtmp_state_crtstm_send
 			log.Println("rtmp_state_crtstm_send")
 
 		case rtmp_state_crtstm_send:
-			log.Println("handleCreateStreamResponse")
-			err = h.handleCreateStreamResponse(m)
+			h.functionalStreamId, err = handleCreateStreamResponse(m, 0)
 			if err != nil {
 				return
 			}
-			err = h.sendGetStreamLengthMessage()
-			if err != nil {
+			h.status = rtmp_state_crtstrm_success
+
+			if h.role == ROLE_PLAY {
+				err = sendGetStreamLengthMessage(h.rw, h.chunkPacker, h.transactionId, h.rtmpUrl.streamName)
+				if err != nil {
+					return
+				}
+				h.transactionId++
+
+				err = sendPlayMessage(h.rw, h.chunkPacker, h.transactionId, -2000, h.rtmpUrl.streamName)
+				if err != nil {
+					return
+				}
+				h.transactionId++
+
+				err = sendSetBufferLengthMessage(h.rw, h.chunkPacker, h.transactionId, 1000)
+				if err != nil {
+					return
+				}
+				h.transactionId++
+
+				h.status = rtmp_state_play_send
+			} else {
+				err = sendPublishMessage(h.rw, h.chunkPacker, h.transactionId, h.rtmpUrl.appName, h.rtmpUrl.streamName)
+				if err != nil {
+					return
+				}
+				h.transactionId++
+				h.status = rtmp_state_publish_send
+			}
+		case rtmp_state_stream_begin:
+			if h.role != ROLE_PLAY {
+				err = fmt.Errorf("state stream_begin role not math:%s", h.role)
 				return
 			}
-			err = h.sendPlayMessage()
-			if err != nil {
-				return
-			}
-			err = h.sendSetBufferLengthMessage()
-			if err != nil {
-				return
-			}
-			h.status = rtmp_state_play_send
-		case rtmp_state_play_send:
 			err = h.handlePlayResponseReset(m)
 			if err != nil {
 				return
 			}
 			h.status = rtmp_state_play_reset
+
 		case rtmp_state_play_reset:
+			if h.role != ROLE_PLAY {
+				err = fmt.Errorf("state play_reset role not math:%s", h.role)
+				return
+			}
 			var status int
 			err, status = h.handlePlayResponseStart(m)
 			if err != nil {
@@ -256,51 +292,29 @@ func (h *RtmpPlayHandler) handleCommandMessage(m *CommandMessage) (err error) {
 			}
 		case rtmp_state_play_start:
 			log.Println("<<<<<<<<<<<<receive msg after publish success>>>>>>>>>>>>>")
+		case rtmp_state_publish_send:
+			if h.role != ROLE_PUBLISH {
+				err = fmt.Errorf("state publish_send role not math:%s", h.role)
+				return
+			}
+			err = handlePublishResponse(m)
+			if err != nil {
+				return
+			}
+			h.status = rtmp_state_publish_success
+		case rtmp_state_publish_success:
+			if h.role != ROLE_PUBLISH {
+				err = fmt.Errorf("state publish_success role not math:%s", h.role)
+				return
+			}
+			log.Println("<<<<<<<<<<<<receive msg after publish success>>>>>>>>>>>>>")
 		}
 
 	}
 	return
 }
 
-func (h *RtmpPlayHandler) sendWidowAckMessage() error {
-	msg := NewAckMessage(2500000)
-	return h.WriteMessage(msg)
-}
-
-func (h *RtmpPlayHandler) sendCreateStreamMessage() error {
-	msg, err := NewCreateStreamMessage(h.transactionId)
-	if err != nil {
-		return err
-	}
-	h.transactionId += 1
-	return h.WriteMessage(msg)
-}
-
-func (h *RtmpPlayHandler) sendGetStreamLengthMessage() error {
-	msg, err := NewGetStreamLengthMessage(h.transactionId, h.streamName)
-	if err != nil {
-		return err
-	}
-	h.transactionId += 1
-	return h.WriteMessage(msg)
-
-}
-
-func (h *RtmpPlayHandler) sendPlayMessage() error {
-	msg, err := NewPlayMessage(h.transactionId, h.streamName, -2000)
-	if err != nil {
-		return err
-	}
-	h.transactionId += 1
-	return h.WriteMessage(msg)
-}
-
-func (h *RtmpPlayHandler) sendSetBufferLengthMessage() error {
-	msg := NewSetBufferLengthMessage(h.functionalStreamId, 1000)
-	return h.WriteMessage(msg)
-}
-
-func (h *RtmpPlayHandler) handleSharedObjectMessage(m *SharedObjectMessage) error {
+func (h *RtmpClientHandler) handleSharedObjectMessage(m *SharedObjectMessage) error {
 	switch m.MessageType {
 	case 16: //AFM3
 	case 19: //AFM0
@@ -308,105 +322,11 @@ func (h *RtmpPlayHandler) handleSharedObjectMessage(m *SharedObjectMessage) erro
 	return nil
 }
 
-func (h *RtmpPlayHandler) handleAggregateMessage(m *AggregateMessage) error {
+func (h *RtmpClientHandler) handleAggregateMessage(m *AggregateMessage) error {
 	return nil
 }
 
-func (h *RtmpPlayHandler) handleConnectResponse(m *CommandMessage) error {
-	log.Println("handleConnectResponse")
-	r := bytes.NewReader(m.Payload)
-	v, e := amf.ReadValue(r)
-	if e != nil {
-		return e
-	}
-	str, ok := v.(string)
-	if !ok || str != "_result" {
-		return fmt.Errorf("connecting wrong response:%s", str)
-	}
-
-	v, e = amf.ReadValue(r)
-	if e != nil {
-		return e
-	}
-	transId, ok := v.(float64)
-	if !ok {
-		return fmt.Errorf("connecting wrong transid")
-	}
-	log.Println("response for transId:", transId)
-
-	status := h.status
-	for {
-		obj, e := amf.ReadValue(r)
-		if e == io.EOF {
-			break
-		}
-		if e != nil {
-			return e
-		}
-		objmap, ok := obj.(amf.Object)
-		if !ok {
-			return fmt.Errorf("connecting wrong response")
-		}
-		code, ok := objmap["code"]
-		if ok {
-			if code.(string) != "NetConnection.Connect.Success" {
-				return fmt.Errorf("connect fail:%s", v.(string))
-			} else {
-				status = rtmp_state_connect_success
-				break
-			}
-		}
-	}
-	if status != rtmp_state_connect_success {
-		return fmt.Errorf("connect fail")
-	}
-	return nil
-}
-
-func (h *RtmpPlayHandler) handleCreateStreamResponse(m *CommandMessage) error {
-
-	r := bytes.NewReader(m.Payload)
-	v, e := amf.ReadValue(r)
-	if e != nil {
-		return e
-	}
-	str, ok := v.(string)
-	if !ok || str != "_result" {
-		return fmt.Errorf("createstream wrong response:%s", str)
-	}
-
-	v, e = amf.ReadValue(r)
-	if e != nil {
-		return e
-	}
-	transId, ok := v.(float64)
-	if !ok {
-		return fmt.Errorf("createstream wrong transid")
-	}
-	log.Println("response for transId:", transId)
-
-	v, e = amf.ReadValue(r)
-	if e != nil {
-		return e
-	}
-	if v != nil {
-		return fmt.Errorf("createstream wrong response")
-	}
-
-	v, e = amf.ReadValue(r)
-	if e != nil {
-		return e
-	}
-	functionalStreamId, ok := v.(float64)
-	if !ok {
-		return fmt.Errorf("createstream wrong functionalStreamId")
-	}
-	h.functionalStreamId = uint32(functionalStreamId)
-	h.status = rtmp_state_crtstrm_success
-	return nil
-}
-
-func (h *RtmpPlayHandler) handlePlayResponseReset(m *CommandMessage) error {
+func (h *RtmpClientHandler) handlePlayResponseReset(m *CommandMessage) error {
 	r := bytes.NewReader(m.Payload)
 	v, e := amf.ReadValue(r)
 	if e != nil {
@@ -455,7 +375,7 @@ func (h *RtmpPlayHandler) handlePlayResponseReset(m *CommandMessage) error {
 	return nil
 }
 
-func (h *RtmpPlayHandler) handlePlayResponseStart(m *CommandMessage) (error, int) {
+func (h *RtmpClientHandler) handlePlayResponseStart(m *CommandMessage) (error, int) {
 	r := bytes.NewReader(m.Payload)
 	v, e := amf.ReadValue(r)
 	if e != nil {
@@ -506,7 +426,7 @@ func (h *RtmpPlayHandler) handlePlayResponseStart(m *CommandMessage) (error, int
 	return nil, 0
 }
 
-func (h *RtmpPlayHandler) sendAVDMessage(m *Message) error {
+func (h *RtmpClientHandler) sendMessage(m *Message) error {
 	if h.status != rtmp_state_play_start {
 		return fmt.Errorf("not in play start state")
 	}
@@ -518,7 +438,7 @@ func (h *RtmpPlayHandler) sendAVDMessage(m *Message) error {
 	return h.WriteMessage(m)
 }
 
-func (h *RtmpPlayHandler) WriteMessage(m *Message) error {
+func (h *RtmpClientHandler) WriteMessage(m *Message) error {
 
 	w := &bytes.Buffer{}
 
@@ -537,4 +457,28 @@ func (h *RtmpPlayHandler) WriteMessage(m *Message) error {
 	}
 
 	return err
+}
+
+func (h *RtmpClientHandler) SendAudio(data []byte, timestamp uint32) error {
+	message := &Message{
+		MessageType: TYPE_AUDIO,
+		Timestamp:   timestamp,
+		StreamID:    0,
+		Payload:     data,
+	}
+
+	h.txMsgChan <- message
+	return nil
+}
+
+func (h *RtmpClientHandler) SendVideo(data []byte, timestamp uint32) error {
+	message := &Message{
+		MessageType: TYPE_VIDEO,
+		Timestamp:   timestamp,
+		StreamID:    0,
+		Payload:     data,
+	}
+
+	h.txMsgChan <- message
+	return nil
 }
