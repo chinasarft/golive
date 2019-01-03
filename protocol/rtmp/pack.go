@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
 )
 
 type ChunkUnpacker struct {
@@ -94,7 +93,7 @@ func (h *ChunkUnpacker) getRtmpMessage(rw io.ReadWriter) (*Message, error) {
 		if err != nil {
 			return nil, err
 		}
-		log.Println("chunk timestamp:", chunk.timestamp)
+		//log.Println("chunk timestamp:", chunk.timestamp)
 
 		msg, err := h.messageCollector.HandleReceiveChunk(chunk)
 		if err != nil {

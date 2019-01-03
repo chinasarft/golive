@@ -210,9 +210,7 @@ func (h *RtmpHandler) handleCommandMessage(m *CommandMessage) (err error) {
 					err = h.handlePublishCommand(r)
 					if err == nil {
 						h.putMsg, err = h.pad.OnSourceDetermined(h, h.ctx)
-						if err == nil {
-							h.role = "source"
-						}
+						h.role = "source"
 					}
 					if err == nil {
 						h.status = rtmp_state_publish_success
@@ -228,9 +226,7 @@ func (h *RtmpHandler) handleCommandMessage(m *CommandMessage) (err error) {
 					err = h.handlePlayCommand(r, m)
 					if err == nil {
 						err = h.pad.OnSinkDetermined(h, h.ctx)
-						if err == nil {
-							h.role = "sink"
-						}
+						h.role = "sink"
 					}
 					if err == nil {
 						h.status = rtmp_state_play_start
@@ -294,9 +290,9 @@ func (h *RtmpHandler) handleVideoMessage(m *VideoMessage) error {
 		if isKeyFrame != 1 {
 			return fmt.Errorf("wrong vsequence header")
 		}
-		log.Println("receive metavideo and put:", len(m.Payload), m.Payload[0])
+		//log.Println("receive metavideo and put:", len(m.Payload), m.Payload[0])
 	}
-	log.Println("receive video and put:", len(m.Payload), m.Payload[0], m.Timestamp)
+	//log.Println("receive video and put:", len(m.Payload), m.Payload[0], m.Timestamp)
 	if err := h.putMsg((*Message)(m)); err != nil {
 		return err
 	}
@@ -311,7 +307,7 @@ func (h *RtmpHandler) handleAudioMessage(m *AudioMessage) error {
 		return fmt.Errorf("video codec id not same:%d %d", h.audioCodecID, aCodecId)
 	}
 
-	log.Println("receive audio and put:", len(m.Payload), m.Timestamp)
+	//log.Println("receive audio and put:", len(m.Payload), m.Timestamp)
 	if err := h.putMsg((*Message)(m)); err != nil {
 		return err
 	}
