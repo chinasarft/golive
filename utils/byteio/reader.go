@@ -88,6 +88,21 @@ func U40BE(b []byte) (i uint64) {
 	return
 }
 
+func U48BE(b []byte) (i uint64) {
+	i = uint64(b[0])
+	i <<= 8
+	i |= uint64(b[1])
+	i <<= 8
+	i |= uint64(b[2])
+	i <<= 8
+	i |= uint64(b[3])
+	i <<= 8
+	i |= uint64(b[4])
+	i <<= 8
+	i |= uint64(b[5])
+	return
+}
+
 func U64BE(b []byte) (i uint64) {
 	i = uint64(b[0])
 	i <<= 8

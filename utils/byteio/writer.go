@@ -9,7 +9,7 @@ func PutU8(b []byte, v uint32) {
 	b[0] = byte(v)
 }
 
-func PutU16BE(b []byte, v uint32) {
+func PutU16BE(b []byte, v uint16) {
 	b[0] = byte(v >> 8)
 	b[1] = byte(v)
 }
@@ -36,6 +36,15 @@ func PutU32BE(b []byte, v uint32) {
 	b[1] = byte(v >> 16)
 	b[2] = byte(v >> 8)
 	b[3] = byte(v)
+}
+
+func PutU48BE(b []byte, v uint64) {
+	b[0] = byte(v >> 40)
+	b[1] = byte(v >> 32)
+	b[2] = byte(v >> 24)
+	b[3] = byte(v >> 16)
+	b[4] = byte(v >> 8)
+	b[5] = byte(v)
 }
 
 func PutU32LE(b []byte, v uint32) {
@@ -67,60 +76,64 @@ func PutU64LE(b []byte, v uint64) {
 	b[0] = byte(v)
 }
 
-func WriteU8(r io.Writer, v uint32) {
+func WriteU8(r io.Writer, v uint32) (int, error) {
 	b := make([]byte, 1)
 	PutU8(b, v)
-	r.Write(b[0:1])
-
+	return r.Write(b)
 }
 
-func WriteU16BE(r io.Writer, v uint32) {
+func WriteU16BE(r io.Writer, v uint16) (int, error) {
 	b := make([]byte, 2)
 	PutU16BE(b, v)
-	r.Write(b[0:2])
+	return r.Write(b)
 }
 
-func WriteU16LE(r io.Writer, v uint32) {
+func WriteU16LE(r io.Writer, v uint32) (int, error) {
 	b := make([]byte, 2)
 	PutU16LE(b, v)
-	r.Write(b[0:2])
+	return r.Write(b)
 }
 
-func WriteU24BE(r io.Writer, v uint32) {
+func WriteU24BE(r io.Writer, v uint32) (int, error) {
 	b := make([]byte, 3)
 	PutU24BE(b, v)
-	r.Write(b[0:3])
+	return r.Write(b)
 }
 
-func WriteU24LE(r io.Writer, v uint32) {
+func WriteU24LE(r io.Writer, v uint32) (int, error) {
 	b := make([]byte, 3)
 	PutU24LE(b, v)
-	r.Write(b[0:3])
+	return r.Write(b)
 }
 
-func WriteU32BE(r io.Writer, v uint32) {
+func WriteU32BE(r io.Writer, v uint32) (int, error) {
 	b := make([]byte, 4)
 	PutU32BE(b, v)
-	r.Write(b[0:4])
-
+	return r.Write(b)
 }
 
-func WriteU32LE(r io.Writer, v uint32) {
+func WriteU32LE(r io.Writer, v uint32) (int, error) {
 	b := make([]byte, 4)
 	PutU32LE(b, v)
-	r.Write(b[0:4])
+	return r.Write(b)
 }
 
-func WriteU64BE(r io.Writer, v uint64) {
+func WriteI32BE(r io.Writer, v int32) (int, error) {
+	b := []byte{0, 0, 0, 0}
+	PutU32BE(b, uint32(v))
+	return r.Write(b)
+}
+
+func WriteU64BE(r io.Writer, v uint64) (int, error) {
 	b := make([]byte, 8)
 	PutU64BE(b, v)
-	r.Write(b[0:8])
+	return r.Write(b)
 }
 
-func WriteU64LE(r io.Writer, v uint64) {
+func WriteU64LE(r io.Writer, v uint64) (int, error) {
 	b := make([]byte, 8)
 	PutU64LE(b, v)
-	r.Write(b[0:8])
+	return r.Write(b)
 }
 
 func WriteFloat32BE(w io.Writer, f float32) error {
