@@ -71,6 +71,8 @@ func NewRtmpHandler(rw io.ReadWriter, pad Pad) *RtmpHandler {
 		chunkPacker:   NewChunkPacker(),
 		rw:            rw,
 		pad:           pad,
+		videoCodecID:  -1,
+		audioCodecID:  -1,
 	}
 }
 
@@ -283,7 +285,7 @@ func (h *RtmpHandler) handleVideoMessage(m *VideoMessage) error {
 
 	isKeyFrame := (m.Payload[0] >> 4)
 	vCodecId := int(m.Payload[0] & 0x0F)
-	if h.hasReceivedAvMeta && h.videoCodecID != vCodecId {
+	if h.videoCodecID != -1 && h.videoCodecID != vCodecId {
 		return fmt.Errorf("video codec id not same:%d %d", h.videoCodecID, vCodecId)
 	}
 	if m.Payload[1] == 0 { // sequence header
@@ -303,7 +305,7 @@ func (h *RtmpHandler) handleVideoMessage(m *VideoMessage) error {
 func (h *RtmpHandler) handleAudioMessage(m *AudioMessage) error {
 
 	aCodecId := int((m.Payload[0] & 0xF0) >> 4)
-	if h.hasReceivedAvMeta && h.audioCodecID != aCodecId {
+	if h.audioCodecID != -1 && h.audioCodecID != aCodecId {
 		return fmt.Errorf("video codec id not same:%d %d", h.audioCodecID, aCodecId)
 	}
 
@@ -722,21 +724,32 @@ func (h *RtmpHandler) handleSetDataFrame(r amf.Reader, m *DataMessage) error {
 				panic("amf.object to amf.Object fail")
 			}
 			h.avInfo = avinfo
-			codecid, ok := avinfo["videocodecid"].(float64)
-			if !ok {
-				panic("videocodecid not float64")
+
+			vCodecID := h.videoCodecID
+			aCodecID := h.audioCodecID
+
+			_, ok = avinfo["videocodecid"]
+			if ok {
+				if codecid, ok := avinfo["videocodecid"].(float64); ok {
+					vCodecID = int(codecid)
+				} else {
+					panic("videocodecid not float64")
+				}
+
 			}
-			vCodecID := int(codecid)
-			if vCodecID != rtmp_codec_h264 && vCodecID != rtmp_codec_h265 {
+			if vCodecID != -1 && vCodecID != rtmp_codec_h264 && vCodecID != rtmp_codec_h265 {
 				return fmt.Errorf("video not support codecid:%d", vCodecID)
 			}
 
-			codecid, ok = avinfo["audiocodecid"].(float64)
-			if !ok {
-				panic("audiocodecid not float64")
+			_, ok = avinfo["audiocodecid"].(float64)
+			if ok {
+				if codecid, ok := avinfo["audiocodecid"].(float64); ok {
+					aCodecID = int(codecid)
+				} else {
+					panic("audiocodecid not float64")
+				}
 			}
-			aCodecID := int(codecid)
-			if aCodecID != rtmp_codec_aac {
+			if aCodecID != -1 && aCodecID != rtmp_codec_aac {
 				return fmt.Errorf("audio not support codecid:%d", aCodecID)
 			}
 
