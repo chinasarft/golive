@@ -16,6 +16,10 @@ const (
 	BoxTypeTFDT = 0x74666474 // '----tfdt'
 	BoxTypeTRUN = 0x7472756e // '----trun'
 
+	BoxTypeMFRA = 0x6d667261 // 'mfra'
+	BoxTypeTFRA = 0x74667261 // '--tfra'
+	BoxTypeMFRO = 0x6d66726f // '--mfro'
+
 	BoxTypeFREE = 0x66726565 // 'free'
 	BoxTypeSKIP = 0x736b6970 // 'skip'
 
@@ -65,13 +69,24 @@ const (
 	Mp4BoxBrandForbidden = 0x00
 	Mp4BoxBrandISOM      = 0x69736f6d // 'isom'
 	Mp4BoxBrandISO2      = 0x69736f32 // 'iso2'
+	Mp4BoxBrandISO6      = 0x69736f36 // 'iso6'
 	Mp4BoxBrandAVC1      = 0x61766331 // 'avc1'
 	Mp4BoxBrandMP41      = 0x6d703431 // 'mp41'
 
-	// The type of track, maybe combine of types.
-	Mp4TrackTypeForbidden = 0x00
-	Mp4TrackTypeAudio     = 0x01
-	Mp4TrackTypeVideo     = 0x02
+	VideoHandlerType = 0x76797065 //'vide'
+	AudioHandlerType = 0x736f756e //'soun'
+
+)
+
+const (
+	MvhdBoxBodyLenVer0 = 96
+	MvhdBoxBodyLenVer1 = 108
+	TkhdBoxBodyLenVer0 = 80
+	TkhdBoxBodyLenVer1 = 92
+	SmhdBoxBodyLen     = 4
+	VmhdBoxBodyLen     = 8
+	MdhdBoxBodyLenVer0 = 20
+	MdhdBoxBodyLenVer1 = 32
 )
 
 /**
@@ -313,19 +328,6 @@ const (
 
 	Mp4HandlerTypeVIDE = 0x76696465 // 'vide'
 	Mp4HandlerTypeSOUN = 0x736f756e // 'soun'
-)
-
-// Table 1 — List of Class Tags for Descriptors
-// ISO_IEC_14496-1-System-2010.pdf, page 31
-const (
-	Mp4ESTagESforbidden             = 0x00
-	Mp4ESTagESObjectDescrTag        = 0x01
-	Mp4ESTagESInitialObjectDescrTag = 0x02
-	Mp4ESTagESDescrTag              = 0x03
-	Mp4ESTagESDecoderConfigDescrTag = 0x04
-	Mp4ESTagESDecSpecificInfoTag    = 0x05
-	Mp4ESTagESSLConfigDescrTag      = 0x06
-	Mp4ESTagESExtSLConfigDescrTag   = 0x064
 )
 
 // Table 5 — objectTypeIndication Values

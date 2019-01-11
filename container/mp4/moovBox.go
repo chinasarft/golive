@@ -11,10 +11,7 @@ import (
 aligned(8) class MovieBox extends Box(‘moov’){
 }
 */
-type MoovBox struct {
-	*Box
-	SubBoxes []IBox
-}
+type MoovBox = SimpleBoxContainer
 
 /*
 aligned(8) class MovieHeaderBox extends FullBox(‘mvhd’, version, 0) {
@@ -59,18 +56,14 @@ type MvhdBox struct {
 	Reserved2        [2]uint32
 	TemplateMatrix   [9]int32
 	PreDefined       [6][4]byte
-
-	NextTrackID uint32
+	NextTrackID      uint32 // ffmpeg生成的a(2)/v(1)两个track, 但是这个值还是2，不应该是3么？
 }
 
 /*
 aligned(8) class TrackBox extends Box(‘trak’) {
 }
 */
-type TrakBox struct {
-	*Box
-	SubBoxes []IBox
-}
+type TrakBox = SimpleBoxContainer
 
 /*
 aligned(8) class TrackHeaderBox
@@ -123,10 +116,7 @@ type TkhdBox struct {
 aligned(8) class EditBox extends Box(‘edts’) {
 }
 */
-type EdtsBox struct {
-	*Box
-	SubBoxes []IBox
-}
+type EdtsBox = SimpleBoxContainer
 
 /*
 aligned(8) class EditListBox extends FullBox(‘elst’, version, 0) {
@@ -161,10 +151,7 @@ type ElstBox struct {
 aligned(8) class MediaBox extends Box(‘mdia’) {
 }
 */
-type MdiaBox struct {
-	*Box
-	SubBoxes []IBox
-}
+type MdiaBox = SimpleBoxContainer
 
 /*
 aligned(8) class MediaHeaderBox extends FullBox(‘mdhd’, version, 0) {
@@ -206,7 +193,7 @@ aligned(8) class HandlerBox extends FullBox(‘hdlr’, version = 0, 0) {
 type HdlrBox struct {
 	*FullBox
 	PreDefined  uint32
-	handlerType uint32
+	handlerType uint32 // 'vide' for video 'soun' for audio
 	Reserved    [3]uint32
 	Name        []byte
 }
@@ -215,10 +202,7 @@ type HdlrBox struct {
 aligned(8) class MediaInformationBox extends Box(‘minf’) {
 }
 */
-type MinfBox struct {
-	*Box
-	SubBoxes []IBox
-}
+type MinfBox = SimpleBoxContainer
 
 /*
 aligned(8) class VideoMediaHeaderBox
@@ -237,10 +221,7 @@ type VmhdBox struct {
 aligned(8) class DataInformationBox extends Box(‘dinf’) {
 }
 */
-type DinfBox struct {
-	*Box
-	SubBoxes []IBox
-}
+type DinfBox = SimpleBoxContainer
 
 /*
 aligned(8) class DataEntryUrlBox (bit(24) flags)
@@ -279,10 +260,7 @@ type DrefBox struct {
 aligned(8) class SampleTableBox extends Box(‘stbl’) {
 }
 */
-type StblBox struct {
-	*Box
-	SubBoxes []IBox
-}
+type StblBox = SimpleBoxContainer
 
 /*
 aligned(8) class SampleDescriptionBox (unsigned int(32) handler_type)
@@ -356,6 +334,7 @@ type SampleEntry struct {
 	DataReferenceIndex uint16
 }
 type VisualSampleEntry struct {
+	SampleEntry
 	PreDefined1             uint16
 	Reserved1               uint16
 	PreDefined2             [3]uint32
@@ -369,14 +348,13 @@ type VisualSampleEntry struct {
 	TemplateDepth           uint16 // 0x0018
 	PreDefined3             int16
 }
-type AVCConfigurationBox struct {
+type AVCCConfigurationBox struct {
 	*Box
 	AVCDecoderConfigurationRecord
 }
 type AVCSampleEntry struct {
-	SampleEntry
 	VisualSampleEntry
-	AVCConfigurationBox
+	AVCCConfigurationBox
 }
 type Avc1Box struct {
 	*Box
@@ -389,14 +367,40 @@ type HVCCConfigurationBox struct {
 	HevcDecoderConfigurationRecord
 }
 type HevcSampleEntry struct {
-	SampleEntry
 	VisualSampleEntry
-	AVCConfigurationBox
+	HVCCConfigurationBox
 }
 type Hev1Box struct {
 	*Box
-	AVCEntry AVCSampleEntry
-	SubBoxes []IBox
+	HEVCEntry HevcSampleEntry
+	SubBoxes  []IBox
+}
+
+/*
+https://l.web.umkc.edu/lizhu/teaching/2016sp.video-communication/ref/mp4.pdf
+iso-14496-12
+class AudioSampleEntry(codingname) extends SampleEntry (codingname){
+    const unsigned int(32)[2] reserved = 0;
+    template unsigned int(16) channelcount = 2;
+    template unsigned int(16) samplesize = 16;
+    unsigned int(16) pre_defined = 0;
+    const unsigned int(16) reserved = 0 ;
+    template unsigned int(32) samplerate = { default samplerate of media}<<16;
+}
+*/
+type AudioSampleEntry struct {
+	SampleEntry
+	Reserved1          [2]uint32
+	Channles           uint16
+	SampleRate         uint16
+	PreDefined         uint16
+	Reserved2          uint16
+	TemplateSampleRate uint32
+}
+type Mp4aBox struct {
+	*Box
+	AudioEntry AudioSampleEntry
+	SubBoxes   []IBox
 }
 
 /*
@@ -480,10 +484,7 @@ type StcoBox struct {
 aligned(8) class MovieExtendsBox extends Box(‘mvex’){
 }
 */
-type MvexBox struct {
-	*Box
-	SubBoxes []IBox
-}
+type MvexBox = SimpleBoxContainer
 
 /*
 aligned(8) class TrackExtendsBox extends FullBox(‘trex’, 0, 0){
@@ -507,9 +508,19 @@ type TrexBox struct {
 aligned(8) class UserDataBox extends Box(‘udta’) {
 }
 */
-type UdtaBox struct {
-	*Box
-	SubBoxes []IBox
+type UdtaBox = SimpleBoxContainer
+
+/*
+aligned(8) class SoundMediaHeaderBox
+   extends FullBox(‘smhd’, version = 0, 0) {
+   template int(16) balance = 0;
+   const unsigned int(16)  reserved = 0;
+}
+*/
+type SmhdBox struct {
+	*FullBox
+	TmeplateBalance int16
+	Reserved        uint16
 }
 
 func NewMoovBox(b *Box) *MoovBox {
@@ -518,81 +529,9 @@ func NewMoovBox(b *Box) *MoovBox {
 	}
 }
 
-func (b *MoovBox) Serialize(w io.Writer) (writedLen int, err error) {
-
-	if writedLen, err = b.Box.Serialize(w); err != nil {
-		return
-	}
-
-	curWriteLen := 0
-	for i := 0; i < len(b.SubBoxes); i++ {
-		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
-			return
-		}
-		writedLen += curWriteLen
-	}
-
-	return
-}
-
-func (b *MoovBox) Parse(r io.Reader) (totalReadLen int, err error) {
-
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in moov box")
-		return
-	}
-
-	remainSize := int(b.Size) - BOX_SIZE
-	curReadLen := 0
-	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
-			return
-		}
-		totalReadLen += curReadLen
-		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeMVHD:
-			mvhdBox := NewMvhdBox(bb)
-			if curReadLen, err = mvhdBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, mvhdBox)
-		case BoxTypeTRAK:
-			trakBox := NewTrakBox(bb)
-			if curReadLen, err = trakBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, trakBox)
-		case BoxTypeMVEX:
-			mvexBox := NewMvexBox(bb)
-			if curReadLen, err = mvexBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, mvexBox)
-
-		case BoxTypeUDTA:
-			udtaBox := NewUdtaBox(bb)
-			if curReadLen, err = udtaBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, udtaBox)
-
-		default:
-			unsprtBox := NewUnsupporttedBox(bb)
-			if curReadLen, err = unsprtBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, unsprtBox)
-		}
-		if curReadLen > 0 {
-			totalReadLen += curReadLen
-			remainSize -= curReadLen
-		}
-
-	}
+func ParseMoovBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewMoovBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -667,20 +606,21 @@ func (b *MvhdBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *MvhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseMvhdBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewMvhdBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in mvhd box")
-		return
-	}
+func (b *MvhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, FULLBOX_ANY_VERSION, 0); err != nil {
 		return
 	}
 
-	bufLen := 96
+	bufLen := MvhdBoxBodyLenVer0
 	if b.version == 1 {
-		bufLen += 12
+		bufLen = MvhdBoxBodyLenVer1
 	}
 	buf := make([]byte, bufLen)
 
@@ -738,72 +678,9 @@ func NewTrakBox(b *Box) *TrakBox {
 	}
 }
 
-func (b *TrakBox) Serialize(w io.Writer) (writedLen int, err error) {
-
-	if writedLen, err = b.Box.Serialize(w); err != nil {
-		return
-	}
-
-	curWriteLen := 0
-	for i := 0; i < len(b.SubBoxes); i++ {
-		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
-			return
-		}
-		writedLen += curWriteLen
-	}
-
-	return
-}
-
-func (b *TrakBox) Parse(r io.Reader) (totalReadLen int, err error) {
-
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in trak box")
-		return
-	}
-
-	remainSize := int(b.Size) - BOX_SIZE
-	curReadLen := 0
-	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
-			return
-		}
-		totalReadLen += curReadLen
-		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeTKHD:
-			tkhdBox := NewTkhdBox(bb)
-			if curReadLen, err = tkhdBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, tkhdBox)
-		case BoxTypeEDTS:
-			edtsBox := NewEdtsBox(bb)
-			if curReadLen, err = edtsBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, edtsBox)
-		case BoxTypeMDIA:
-			mdiaBox := NewMdiaBox(bb)
-			if curReadLen, err = mdiaBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, mdiaBox)
-		default:
-			unsprtBox := NewUnsupporttedBox(bb)
-			if curReadLen, err = unsprtBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, unsprtBox)
-		}
-		if curReadLen > 0 {
-			remainSize -= curReadLen
-			totalReadLen += curReadLen
-		}
-	}
+func ParseTrakBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewTrakBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -875,20 +752,21 @@ func (b *TkhdBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *TkhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseTkhdBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewTkhdBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in tkhd box")
-		return
-	}
+func (b *TkhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, FULLBOX_ANY_VERSION, FULLBOX_ANY_FLAG); err != nil {
 		return
 	}
 
-	bufLen := 80
+	bufLen := TkhdBoxBodyLenVer0
 	if b.version == 1 {
-		bufLen += 12
+		bufLen = TkhdBoxBodyLenVer1
 	}
 	buf := make([]byte, bufLen)
 
@@ -946,61 +824,15 @@ func NewEdtsBox(b *Box) *EdtsBox {
 	}
 }
 
-func (b *EdtsBox) Serialize(w io.Writer) (writedLen int, err error) {
-
-	if writedLen, err = b.Box.Serialize(w); err != nil {
-		return
-	}
-
-	curWriteLen := 0
-	for i := 0; i < len(b.SubBoxes); i++ {
-		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
-			return
-		}
-		writedLen += curWriteLen
-	}
-
+func ParseEdtsBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewEdtsBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
-func (b *EdtsBox) Parse(r io.Reader) (totalReadLen int, err error) {
-
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in edts box")
-		return
-	}
-
-	remainSize := int(b.Size) - BOX_SIZE
-	curReadLen := 0
-	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
-			return
-		}
-		totalReadLen += curReadLen
-		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeELST:
-			elstBox := NewElstBox(bb)
-			if curReadLen, err = elstBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, elstBox)
-
-		default:
-			unsprtBox := NewUnsupporttedBox(bb)
-			if curReadLen, err = unsprtBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, unsprtBox)
-		}
-		if curReadLen > 0 {
-			remainSize -= curReadLen
-			totalReadLen += curReadLen
-		}
-	}
+func ParseElstBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewElstBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -1058,11 +890,6 @@ func (b *ElstBox) Serialize(w io.Writer) (writedLen int, err error) {
 
 func (b *ElstBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in elst box")
-		return
-	}
-
 	if totalReadLen, err = b.FullBox.Parse(r, 0, FULLBOX_ANY_VERSION, 0); err != nil {
 		return
 	}
@@ -1109,76 +936,9 @@ func NewMdiaBox(b *Box) *MdiaBox {
 	}
 }
 
-func (b *MdiaBox) Serialize(w io.Writer) (writedLen int, err error) {
-
-	if writedLen, err = b.Box.Serialize(w); err != nil {
-		return
-	}
-
-	curWriteLen := 0
-	for i := 0; i < len(b.SubBoxes); i++ {
-		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
-			return
-		}
-		writedLen += curWriteLen
-	}
-
-	return
-}
-
-func (b *MdiaBox) Parse(r io.Reader) (totalReadLen int, err error) {
-
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in mdia box")
-		return
-	}
-
-	remainSize := int(b.Size) - BOX_SIZE
-	curReadLen := 0
-	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
-			return
-		}
-		totalReadLen += curReadLen
-		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeMDHD:
-			mdhdBox := NewMdhdBox(bb)
-			if curReadLen, err = mdhdBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, mdhdBox)
-
-		case BoxTypeHDLR:
-			hdlrBox := NewHdlrBox(bb)
-			if curReadLen, err = hdlrBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, hdlrBox)
-
-		case BoxTypeMINF:
-			minfBox := NewMinfBox(bb)
-			if curReadLen, err = minfBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, minfBox)
-
-		default:
-			unsprtBox := NewUnsupporttedBox(bb)
-			if curReadLen, err = unsprtBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, unsprtBox)
-		}
-		if curReadLen > 0 {
-			remainSize -= curReadLen
-			totalReadLen += curReadLen
-		}
-
-	}
+func ParseMdiaBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewMdiaBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -1230,19 +990,21 @@ func (b *MdhdBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
+func ParseMdhdBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewMdhdBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *MdhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in mdhd box")
-		return
-	}
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, FULLBOX_ANY_VERSION, 0); err != nil {
 		return
 	}
 
-	buf := make([]byte, 32)
+	buf := make([]byte, MdhdBoxBodyLenVer1)
 	if b.version == 0 {
-		buf = buf[0:20]
+		buf = buf[0:MdhdBoxBodyLenVer0]
 	}
 
 	curReadLen := 0
@@ -1306,11 +1068,13 @@ func (b *HdlrBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
+func ParseHdlrBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewHdlrBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *HdlrBox) Parse(r io.Reader) (totalReadLen int, err error) {
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in hdlr box")
-		return
-	}
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 0); err != nil {
 		return
@@ -1349,76 +1113,9 @@ func NewMinfBox(b *Box) *MinfBox {
 	}
 }
 
-func (b *MinfBox) Serialize(w io.Writer) (writedLen int, err error) {
-
-	if writedLen, err = b.Box.Serialize(w); err != nil {
-		return
-	}
-
-	curWriteLen := 0
-	for i := 0; i < len(b.SubBoxes); i++ {
-		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
-			return
-		}
-		writedLen += curWriteLen
-	}
-
-	return
-}
-
-func (b *MinfBox) Parse(r io.Reader) (totalReadLen int, err error) {
-
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in minf box")
-		return
-	}
-
-	remainSize := int(b.Size) - BOX_SIZE
-	curReadLen := 0
-	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
-			return
-		}
-		totalReadLen += curReadLen
-		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeVMHD:
-			vmhdBox := NewVmhdBox(bb)
-			if curReadLen, err = vmhdBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, vmhdBox)
-
-		case BoxTypeDINF:
-			dinfBox := NewDinfBox(bb)
-			if curReadLen, err = dinfBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, dinfBox)
-
-		case BoxTypeSTBL:
-			stblBox := NewStblBox(bb)
-			if curReadLen, err = stblBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, stblBox)
-
-		default:
-			unsprtBox := NewUnsupporttedBox(bb)
-			if curReadLen, err = unsprtBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, unsprtBox)
-		}
-		if curReadLen > 0 {
-			remainSize -= curReadLen
-			totalReadLen += curReadLen
-		}
-
-	}
+func ParseMinfBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewMinfBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -1451,18 +1148,19 @@ func (b *VmhdBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *VmhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseVmhdBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewVmhdBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in vmhd box")
-		return
-	}
+func (b *VmhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 1); err != nil {
 		return
 	}
 
-	buf := make([]byte, 8)
+	buf := make([]byte, VmhdBoxBodyLen)
 
 	curReadLen := 0
 	if curReadLen, err = io.ReadFull(r, buf); err != nil {
@@ -1484,62 +1182,9 @@ func NewDinfBox(b *Box) *DinfBox {
 	}
 }
 
-func (b *DinfBox) Serialize(w io.Writer) (writedLen int, err error) {
-
-	if writedLen, err = b.Box.Serialize(w); err != nil {
-		return
-	}
-
-	curWriteLen := 0
-	for i := 0; i < len(b.SubBoxes); i++ {
-		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
-			return
-		}
-		writedLen += curWriteLen
-	}
-
-	return
-}
-
-func (b *DinfBox) Parse(r io.Reader) (totalReadLen int, err error) {
-
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in dinf box")
-		return
-	}
-
-	remainSize := int(b.Size) - BOX_SIZE
-	curReadLen := 0
-	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
-			return
-		}
-		totalReadLen += curReadLen
-		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeDREF:
-			drefBox := NewDrefBox(bb)
-			if curReadLen, err = drefBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, drefBox)
-
-		default:
-			unsprtBox := NewUnsupporttedBox(bb)
-			if curReadLen, err = unsprtBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, unsprtBox)
-		}
-		if curReadLen > 0 {
-			remainSize -= curReadLen
-			totalReadLen += curReadLen
-		}
-
-	}
+func ParseDinfBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewDinfBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -1579,12 +1224,13 @@ func (b *DrefBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *DrefBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseDrefBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewDrefBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in dref box")
-		return
-	}
+func (b *DrefBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 0); err != nil {
 		return
@@ -1597,32 +1243,15 @@ func (b *DrefBox) Parse(r io.Reader) (totalReadLen int, err error) {
 	}
 	totalReadLen += curReadLen
 
+	var ibox IBox
 	b.EntryCount = byteio.U32BE(buf)
 	for i := uint32(0); i < b.EntryCount; i++ {
 
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
+		if ibox, curReadLen, err = parseChildBox(r); err != nil {
 			return
 		}
 		totalReadLen += curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeURL:
-			urlBox := NewUrlBox(bb)
-			if curReadLen, err = urlBox.Parse(r); err != nil {
-				return
-			}
-			totalReadLen += curReadLen
-			b.SubBoxes = append(b.SubBoxes, urlBox)
-		case BoxTypeURN:
-			urnBox := NewUrnBox(bb)
-			if curReadLen, err = urnBox.Parse(r); err != nil {
-				return
-			}
-			totalReadLen += curReadLen
-			b.SubBoxes = append(b.SubBoxes, urnBox)
-		}
-
+		b.SubBoxes = append(b.SubBoxes, ibox)
 	}
 	return
 }
@@ -1659,11 +1288,13 @@ func (b *UrnBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
+func ParseUrnBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewUrnBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *UrnBox) Parse(r io.Reader) (totalReadLen int, err error) {
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in urn box")
-		return
-	}
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, FULLBOX_ANY_FLAG); err != nil {
 		return
@@ -1719,11 +1350,13 @@ func (b *UrlBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
+func ParseUrlBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewUrlBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *UrlBox) Parse(r io.Reader) (totalReadLen int, err error) {
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in url box")
-		return
-	}
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, FULLBOX_ANY_FLAG); err != nil {
 		return
@@ -1752,91 +1385,9 @@ func NewStblBox(b *Box) *StblBox {
 	}
 }
 
-func (b *StblBox) Serialize(w io.Writer) (writedLen int, err error) {
-
-	if writedLen, err = b.Box.Serialize(w); err != nil {
-		return
-	}
-
-	curWriteLen := 0
-	for i := 0; i < len(b.SubBoxes); i++ {
-		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
-			return
-		}
-		writedLen += curWriteLen
-	}
-
-	return
-}
-
-func (b *StblBox) Parse(r io.Reader) (totalReadLen int, err error) {
-
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in stbl box")
-		return
-	}
-
-	remainSize := int(b.Size) - BOX_SIZE
-	curReadLen := 0
-	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
-			return
-		}
-		totalReadLen += curReadLen
-		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeSTSD:
-			stsdBox := NewStsdBox(bb)
-			if curReadLen, err = stsdBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, stsdBox)
-
-		case BoxTypeSTTS:
-			sttsBox := NewSttsBox(bb)
-			if curReadLen, err = sttsBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, sttsBox)
-
-		case BoxTypeSTSC:
-			stscBox := NewStscBox(bb)
-			if curReadLen, err = stscBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, stscBox)
-		case BoxTypeSTSZ:
-			fallthrough
-		case BoxTypeSTZ2:
-			stszBox := NewStszBox(bb)
-			if curReadLen, err = stszBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, stszBox)
-
-		case BoxTypeSTCO:
-			stcoBox := NewStcoBox(bb)
-			if curReadLen, err = stcoBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, stcoBox)
-
-		default:
-			unsprtBox := NewUnsupporttedBox(bb)
-			if curReadLen, err = unsprtBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, unsprtBox)
-		}
-		if curReadLen > 0 {
-			remainSize -= curReadLen
-			totalReadLen += curReadLen
-		}
-
-	}
+func ParseStblBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewStblBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -1870,12 +1421,13 @@ func (b *StsdBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *StsdBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseStsdBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewStsdBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in stsd box")
-		return
-	}
+func (b *StsdBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, FULLBOX_ANY_VERSION, 0); err != nil {
 		return
@@ -1890,49 +1442,17 @@ func (b *StsdBox) Parse(r io.Reader) (totalReadLen int, err error) {
 	remainSize -= curReadLen
 	totalReadLen += curReadLen
 
+	var ibox IBox
 	b.EntryCount = byteio.U32BE(buf)
 	for remainSize > 0 {
 		for i := uint32(0); i < b.EntryCount; i++ {
-			var bb *Box
-			if bb, curReadLen, err = ParseBox(r); err != nil {
+
+			if ibox, curReadLen, err = parseChildBox(r); err != nil {
 				return
 			}
 			remainSize -= curReadLen
 			totalReadLen += curReadLen
-
-			switch bb.BoxType {
-			case BoxTypeAVC1:
-				avc1Box := NewAvc1Box(bb)
-				if curReadLen, err = avc1Box.Parse(r); err != nil {
-					return
-				}
-				b.SubBoxes = append(b.SubBoxes, avc1Box)
-
-			case BoxTypeHEV1:
-				hev1Box := NewHev1Box(bb)
-				if curReadLen, err = hev1Box.Parse(r); err != nil {
-					return
-				}
-				b.SubBoxes = append(b.SubBoxes, hev1Box)
-
-			case BoxTypePASP:
-				paspBox := NewPaspBox(bb)
-				if curReadLen, err = paspBox.Parse(r); err != nil {
-					return
-				}
-				b.SubBoxes = append(b.SubBoxes, paspBox)
-
-			default:
-				unsprtBox := NewUnsupporttedBox(bb)
-				if curReadLen, err = unsprtBox.Parse(r); err != nil {
-					return
-				}
-				b.SubBoxes = append(b.SubBoxes, unsprtBox)
-			}
-			if curReadLen > 0 {
-				remainSize -= curReadLen
-				totalReadLen += curReadLen
-			}
+			b.SubBoxes = append(b.SubBoxes, ibox)
 		}
 	}
 
@@ -1965,6 +1485,12 @@ func (b *PaspBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
+func ParsePaspBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewPaspBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *PaspBox) Parse(r io.Reader) (totalReadLen int, err error) {
 	buf := make([]byte, 8)
 	if totalReadLen, err = io.ReadFull(r, buf); err != nil {
@@ -1982,41 +1508,105 @@ func NewAvc1Box(b *Box) *Avc1Box {
 	}
 }
 
+func (e *SampleEntry) serialize(w io.Writer) (writedLen int, err error) {
+	buf := make([]byte, 8)
+
+	for i := 0; i < 6; i++ {
+		buf[i] = e.Reserved[i]
+	}
+	byteio.PutU16BE(buf[6:8], e.DataReferenceIndex)
+
+	if writedLen, err = w.Write(buf); err != nil {
+		return
+	}
+	return
+}
+
+func (e *VisualSampleEntry) serialize(w io.Writer) (writedLen int, err error) {
+
+	if writedLen, err = e.SampleEntry.serialize(w); err != nil {
+		return
+	}
+
+	curWriteLen := 0
+	buf := make([]byte, 70) // 70 == VisualSampleEntry
+
+	byteio.PutU16BE(buf[0:2], e.PreDefined1)
+	byteio.PutU16BE(buf[2:4], e.Reserved1)
+	byteio.PutU32BE(buf[4:8], e.PreDefined2[0])
+	byteio.PutU32BE(buf[8:12], e.PreDefined2[1])
+	byteio.PutU32BE(buf[12:16], e.PreDefined2[2])
+	byteio.PutU16BE(buf[16:18], e.Width)
+	byteio.PutU16BE(buf[18:20], e.Height)
+	byteio.PutU32BE(buf[20:24], e.TemplateHorizResolution)
+	byteio.PutU32BE(buf[24:28], e.TemplateVertResolution)
+	byteio.PutU32BE(buf[28:32], e.Reserved3)
+	byteio.PutU16BE(buf[32:34], e.TemplateFrameCount)
+	copy(buf[34:66], e.CompressorName[0:32])
+	byteio.PutU16BE(buf[66:68], e.TemplateDepth)
+	byteio.PutU16BE(buf[68:70], uint16(e.PreDefined3))
+	if curWriteLen, err = w.Write(buf); err != nil {
+		return
+	}
+
+	writedLen += curWriteLen
+	return
+}
+
+func (e *SampleEntry) parse(r io.Reader) (totalReadLen int, err error) {
+
+	buf := make([]byte, 8)
+	if totalReadLen, err = io.ReadFull(r, buf); err != nil {
+		return
+	}
+
+	for i := 0; i < 6; i++ {
+		e.Reserved[i] = buf[i]
+	}
+	e.DataReferenceIndex = byteio.U16BE(buf[6:8])
+
+	return
+}
+
+func (e *VisualSampleEntry) parse(r io.Reader) (totalReadLen int, err error) {
+
+	if totalReadLen, err = e.SampleEntry.parse(r); err != nil {
+		return
+	}
+
+	buf := make([]byte, 70) // 70 == VisualSampleEntry
+	curReadLen := 0
+	if curReadLen, err = io.ReadFull(r, buf); err != nil {
+		return
+	}
+	totalReadLen += curReadLen
+
+	e.PreDefined1 = byteio.U16BE(buf[0:2])
+	e.Reserved1 = byteio.U16BE(buf[2:4])
+	e.PreDefined2[0] = byteio.U32BE(buf[4:8])
+	e.PreDefined2[1] = byteio.U32BE(buf[8:12])
+	e.PreDefined2[2] = byteio.U32BE(buf[12:16])
+	e.Width = byteio.U16BE(buf[16:18])
+	e.Height = byteio.U16BE(buf[18:20])
+	e.TemplateHorizResolution = byteio.U32BE(buf[20:24])
+	e.TemplateVertResolution = byteio.U32BE(buf[24:28])
+	e.Reserved3 = byteio.U32BE(buf[28:32])
+	e.TemplateFrameCount = byteio.U16BE(buf[32:34])
+	copy(e.CompressorName[0:32], buf[34:66])
+	e.TemplateDepth = byteio.U16BE(buf[66:68])
+	e.PreDefined3 = byteio.I16BE(buf[68:70])
+
+	return
+}
+
 func (b *Avc1Box) Serialize(w io.Writer) (writedLen int, err error) {
 
 	if writedLen, err = b.Box.Serialize(w); err != nil {
 		return
 	}
 
-	buf := make([]byte, 70) // 70 == VisualSampleEntry
-
-	for i := 0; i < 6; i++ {
-		buf[i] = b.AVCEntry.Reserved[i]
-	}
-	byteio.PutU16BE(buf[6:8], b.AVCEntry.DataReferenceIndex)
-
 	curWriteLen := 0
-	if curWriteLen, err = w.Write(buf[0:8]); err != nil {
-		return
-	}
-	writedLen += curWriteLen
-
-	byteio.PutU16BE(buf[0:2], b.AVCEntry.PreDefined1)
-	byteio.PutU16BE(buf[2:4], b.AVCEntry.Reserved1)
-	byteio.PutU32BE(buf[4:8], b.AVCEntry.PreDefined2[0])
-	byteio.PutU32BE(buf[8:12], b.AVCEntry.PreDefined2[1])
-	byteio.PutU32BE(buf[12:16], b.AVCEntry.PreDefined2[2])
-	byteio.PutU16BE(buf[16:18], b.AVCEntry.Width)
-	byteio.PutU16BE(buf[18:20], b.AVCEntry.Height)
-	byteio.PutU32BE(buf[20:24], b.AVCEntry.TemplateHorizResolution)
-	byteio.PutU32BE(buf[24:28], b.AVCEntry.TemplateVertResolution)
-	byteio.PutU32BE(buf[28:32], b.AVCEntry.Reserved3)
-	byteio.PutU16BE(buf[32:34], b.AVCEntry.TemplateFrameCount)
-	copy(buf[34:66], b.AVCEntry.CompressorName[0:32])
-	byteio.PutU16BE(buf[66:68], b.AVCEntry.TemplateDepth)
-	byteio.PutU16BE(buf[68:70], uint16(b.AVCEntry.PreDefined3))
-
-	if curWriteLen, err = w.Write(buf); err != nil {
+	if curWriteLen, err = b.AVCEntry.serialize(w); err != nil {
 		return
 	}
 	writedLen += curWriteLen
@@ -2031,39 +1621,19 @@ func (b *Avc1Box) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
+func ParseAvc1Box(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewAvc1Box(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *Avc1Box) Parse(r io.Reader) (totalReadLen int, err error) {
 
-	buf := make([]byte, 70) // 70 == VisualSampleEntry
-	if totalReadLen, err = io.ReadFull(r, buf[0:8]); err != nil {
+	if totalReadLen, err = b.AVCEntry.parse(r); err != nil {
 		return
 	}
-
-	for i := 0; i < 6; i++ {
-		b.AVCEntry.Reserved[i] = buf[i]
-	}
-	b.AVCEntry.DataReferenceIndex = byteio.U16BE(buf[6:8])
 
 	curReadLen := 0
-	if curReadLen, err = io.ReadFull(r, buf); err != nil {
-		return
-	}
-	totalReadLen += curReadLen
-
-	b.AVCEntry.PreDefined1 = byteio.U16BE(buf[0:2])
-	b.AVCEntry.Reserved1 = byteio.U16BE(buf[2:4])
-	b.AVCEntry.PreDefined2[0] = byteio.U32BE(buf[4:8])
-	b.AVCEntry.PreDefined2[1] = byteio.U32BE(buf[8:12])
-	b.AVCEntry.PreDefined2[2] = byteio.U32BE(buf[12:16])
-	b.AVCEntry.Width = byteio.U16BE(buf[16:18])
-	b.AVCEntry.Height = byteio.U16BE(buf[18:20])
-	b.AVCEntry.TemplateHorizResolution = byteio.U32BE(buf[20:24])
-	b.AVCEntry.TemplateVertResolution = byteio.U32BE(buf[24:28])
-	b.AVCEntry.Reserved3 = byteio.U32BE(buf[28:32])
-	b.AVCEntry.TemplateFrameCount = byteio.U16BE(buf[32:34])
-	copy(b.AVCEntry.CompressorName[0:32], buf[34:66])
-	b.AVCEntry.TemplateDepth = byteio.U16BE(buf[66:68])
-	b.AVCEntry.PreDefined3 = byteio.I16BE(buf[68:70])
-
 	var bb *Box
 	if bb, curReadLen, err = ParseBox(r); err != nil {
 		return
@@ -2104,35 +1674,8 @@ func (b *Hev1Box) Serialize(w io.Writer) (writedLen int, err error) {
 		return
 	}
 
-	buf := make([]byte, 70) // 70 == VisualSampleEntry
-
-	for i := 0; i < 6; i++ {
-		buf[i] = b.AVCEntry.Reserved[i]
-	}
-	byteio.PutU16BE(buf[6:8], b.AVCEntry.DataReferenceIndex)
-
 	curWriteLen := 0
-	if curWriteLen, err = w.Write(buf[0:8]); err != nil {
-		return
-	}
-	writedLen += curWriteLen
-
-	byteio.PutU16BE(buf[0:2], b.AVCEntry.PreDefined1)
-	byteio.PutU16BE(buf[2:4], b.AVCEntry.Reserved1)
-	byteio.PutU32BE(buf[4:8], b.AVCEntry.PreDefined2[0])
-	byteio.PutU32BE(buf[8:12], b.AVCEntry.PreDefined2[1])
-	byteio.PutU32BE(buf[12:16], b.AVCEntry.PreDefined2[2])
-	byteio.PutU16BE(buf[16:18], b.AVCEntry.Width)
-	byteio.PutU16BE(buf[18:20], b.AVCEntry.Height)
-	byteio.PutU32BE(buf[20:24], b.AVCEntry.TemplateHorizResolution)
-	byteio.PutU32BE(buf[24:28], b.AVCEntry.TemplateVertResolution)
-	byteio.PutU32BE(buf[28:32], b.AVCEntry.Reserved3)
-	byteio.PutU16BE(buf[32:34], b.AVCEntry.TemplateFrameCount)
-	copy(buf[34:66], b.AVCEntry.CompressorName[0:32])
-	byteio.PutU16BE(buf[66:68], b.AVCEntry.TemplateDepth)
-	byteio.PutU16BE(buf[68:70], uint16(b.AVCEntry.PreDefined3))
-
-	if curWriteLen, err = w.Write(buf); err != nil {
+	if curWriteLen, err = b.HEVCEntry.serialize(w); err != nil {
 		return
 	}
 	writedLen += curWriteLen
@@ -2147,39 +1690,19 @@ func (b *Hev1Box) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
+func ParseHev1Box(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewHev1Box(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *Hev1Box) Parse(r io.Reader) (totalReadLen int, err error) {
 
-	buf := make([]byte, 70) // 70 == VisualSampleEntry
-	if totalReadLen, err = io.ReadFull(r, buf[0:8]); err != nil {
+	if totalReadLen, err = b.HEVCEntry.parse(r); err != nil {
 		return
 	}
-
-	for i := 0; i < 6; i++ {
-		b.AVCEntry.Reserved[i] = buf[i]
-	}
-	b.AVCEntry.DataReferenceIndex = byteio.U16BE(buf[6:8])
 
 	curReadLen := 0
-	if curReadLen, err = io.ReadFull(r, buf); err != nil {
-		return
-	}
-	totalReadLen += curReadLen
-
-	b.AVCEntry.PreDefined1 = byteio.U16BE(buf[0:2])
-	b.AVCEntry.Reserved1 = byteio.U16BE(buf[2:4])
-	b.AVCEntry.PreDefined2[0] = byteio.U32BE(buf[4:8])
-	b.AVCEntry.PreDefined2[1] = byteio.U32BE(buf[8:12])
-	b.AVCEntry.PreDefined2[2] = byteio.U32BE(buf[12:16])
-	b.AVCEntry.Width = byteio.U16BE(buf[16:18])
-	b.AVCEntry.Height = byteio.U16BE(buf[18:20])
-	b.AVCEntry.TemplateHorizResolution = byteio.U32BE(buf[20:24])
-	b.AVCEntry.TemplateVertResolution = byteio.U32BE(buf[24:28])
-	b.AVCEntry.Reserved3 = byteio.U32BE(buf[28:32])
-	b.AVCEntry.TemplateFrameCount = byteio.U16BE(buf[32:34])
-	copy(b.AVCEntry.CompressorName[0:32], buf[34:66])
-	b.AVCEntry.TemplateDepth = byteio.U16BE(buf[66:68])
-	b.AVCEntry.PreDefined3 = byteio.I16BE(buf[68:70])
-
 	var bb *Box
 	if bb, curReadLen, err = ParseBox(r); err != nil {
 		return
@@ -2208,12 +1731,12 @@ func (b *Hev1Box) Parse(r io.Reader) (totalReadLen int, err error) {
 	return
 }
 
-func NewAVCConfigurationBox(b *Box) *AVCConfigurationBox {
-	return &AVCConfigurationBox{
+func NewAVCConfigurationBox(b *Box) *AVCCConfigurationBox {
+	return &AVCCConfigurationBox{
 		Box: b,
 	}
 }
-func (b *AVCConfigurationBox) Serialize(w io.Writer) (writedLen int, err error) {
+func (b *AVCCConfigurationBox) Serialize(w io.Writer) (writedLen int, err error) {
 
 	if writedLen, err = b.Box.Serialize(w); err != nil {
 		return
@@ -2227,7 +1750,7 @@ func (b *AVCConfigurationBox) Serialize(w io.Writer) (writedLen int, err error) 
 	return
 }
 
-func (b *AVCConfigurationBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func (b *AVCCConfigurationBox) Parse(r io.Reader) (totalReadLen int, err error) {
 	totalReadLen, err = b.AVCDecoderConfigurationRecord.Parse(r)
 	return
 }
@@ -2287,12 +1810,13 @@ func (b *SttsBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *SttsBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseSttsBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewSttsBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in stts box")
-		return
-	}
+func (b *SttsBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 0); err != nil {
 		return
@@ -2361,12 +1885,13 @@ func (b *StscBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *StscBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseStscBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewStscBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in stsc box")
-		return
-	}
+func (b *StscBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 0); err != nil {
 		return
@@ -2433,12 +1958,13 @@ func (b *StszBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *StszBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseStszBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewStszBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in stsz box")
-		return
-	}
+func (b *StszBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 0); err != nil {
 		return
@@ -2493,12 +2019,13 @@ func (b *StcoBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *StcoBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseStcoBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewStcoBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in stco box")
-		return
-	}
+func (b *StcoBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 0); err != nil {
 		return
@@ -2537,62 +2064,15 @@ func NewMvexBox(b *Box) *MvexBox {
 	}
 }
 
-func (b *MvexBox) Serialize(w io.Writer) (writedLen int, err error) {
-
-	if writedLen, err = b.Box.Serialize(w); err != nil {
-		return
-	}
-
-	curWriteLen := 0
-	for i := 0; i < len(b.SubBoxes); i++ {
-		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
-			return
-		}
-		writedLen += curWriteLen
-	}
-
+func ParseMvexBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewMvexBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
-func (b *MvexBox) Parse(r io.Reader) (totalReadLen int, err error) {
-
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in mvex box")
-		return
-	}
-
-	remainSize := int(b.Size) - BOX_SIZE
-	curReadLen := 0
-	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
-			return
-		}
-		totalReadLen += curReadLen
-		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeTREX:
-			trexBox := NewTrexBox(bb)
-			if curReadLen, err = trexBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, trexBox)
-
-		default:
-			unsprtBox := NewUnsupporttedBox(bb)
-			if curReadLen, err = unsprtBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, unsprtBox)
-		}
-		if curReadLen > 0 {
-			remainSize -= curReadLen
-			totalReadLen += curReadLen
-		}
-
-	}
+func ParseTrexBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewTrexBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -2628,11 +2108,6 @@ func (b *TrexBox) Serialize(w io.Writer) (writedLen int, err error) {
 
 func (b *TrexBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in trex box")
-		return
-	}
-
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 0); err != nil {
 		return
 	}
@@ -2660,13 +2135,79 @@ func NewUdtaBox(b *Box) *UdtaBox {
 	}
 }
 
-func (b *UdtaBox) Serialize(w io.Writer) (writedLen int, err error) {
+func ParseUdtaBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewUdtaBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
+func NewSmhdBox(b *Box) *SmhdBox {
+	return &SmhdBox{
+		FullBox: &FullBox{
+			Box: b,
+		},
+	}
+}
+
+func ParseSmhdBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewSmhdBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
+func (b *SmhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
+
+	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, FULLBOX_ANY_FLAG); err != nil {
+		return
+	}
+
+	curReadLen := 0
+	buf := make([]byte, 4)
+	if curReadLen, err = io.ReadFull(r, buf[0:4]); err != nil {
+		return
+	}
+	totalReadLen += curReadLen
+	b.TmeplateBalance = byteio.I16BE(buf)
+	b.Reserved = byteio.U16BE(buf[2:4])
+	return
+}
+
+func (b *SmhdBox) Serialize(w io.Writer) (writedLen int, err error) {
+
+	if writedLen, err = b.FullBox.Serialize(w); err != nil {
+		return
+	}
+	curWriteLen := 0
+
+	buf := make([]byte, 4)
+	byteio.PutU16BE(buf, uint16(b.TmeplateBalance))
+	byteio.PutU16BE(buf[2:4], b.Reserved)
+	if curWriteLen, err = w.Write(buf); err != nil {
+		return
+	}
+
+	writedLen += curWriteLen
+	return
+}
+
+func NewMp4aBox(b *Box) *Mp4aBox {
+	return &Mp4aBox{
+		Box: b,
+	}
+}
+
+func (b *Mp4aBox) Serialize(w io.Writer) (writedLen int, err error) {
 
 	if writedLen, err = b.Box.Serialize(w); err != nil {
 		return
 	}
 
 	curWriteLen := 0
+	if curWriteLen, err = b.AudioEntry.serialize(w); err != nil {
+		return
+	}
+	writedLen += curWriteLen
+
 	for i := 0; i < len(b.SubBoxes); i++ {
 		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
 			return
@@ -2677,43 +2218,131 @@ func (b *UdtaBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *UdtaBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseMp4aBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewMp4aBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in udta box")
+func (b *Mp4aBox) Parse(r io.Reader) (totalReadLen int, err error) {
+
+	if totalReadLen, err = b.AudioEntry.parse(r); err != nil {
 		return
 	}
 
-	remainSize := int(b.Size) - BOX_SIZE
 	curReadLen := 0
+	remainSize := int(b.Size) - BOX_SIZE - totalReadLen
+	var ibox IBox
 	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
+		if ibox, curReadLen, err = parseChildBox(r); err != nil {
 			return
 		}
 		totalReadLen += curReadLen
 		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeMETA:
-			metaBox := NewMetaBox(bb)
-			if curReadLen, err = metaBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, metaBox)
-		default:
-			unsprtBox := NewUnsupporttedBox(bb)
-			if curReadLen, err = unsprtBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, unsprtBox)
-		}
-		if curReadLen > 0 {
-			remainSize -= curReadLen
-			totalReadLen += curReadLen
-		}
-
+		b.SubBoxes = append(b.SubBoxes, ibox)
 	}
+	return
+}
+
+func (e *AudioSampleEntry) serialize(w io.Writer) (writedLen int, err error) {
+
+	if writedLen, err = e.SampleEntry.serialize(w); err != nil {
+		return
+	}
+
+	curWriteLen := 0
+	nums := []uint32{
+		e.Reserved1[0],
+		e.Reserved1[1],
+		uint32(e.Channles)<<16 | uint32(e.SampleRate),
+		uint32(e.PreDefined)<<16 | uint32(e.Reserved2),
+		e.TemplateSampleRate,
+	}
+	if curWriteLen, err = uint32Serialize(w, nums); err != nil {
+		return
+	}
+
+	writedLen += curWriteLen
+	return
+}
+
+func (e *AudioSampleEntry) parse(r io.Reader) (totalReadLen int, err error) {
+
+	if totalReadLen, err = e.SampleEntry.parse(r); err != nil {
+		return
+	}
+
+	buf := make([]byte, 20)
+	curReadLen := 0
+	if curReadLen, err = io.ReadFull(r, buf); err != nil {
+		return
+	}
+	totalReadLen += curReadLen
+
+	e.Reserved1[0] = byteio.U32BE(buf)
+	e.Reserved1[1] = byteio.U32BE(buf[4:8])
+	e.Channles = byteio.U16BE(buf[8:10])
+	e.SampleRate = byteio.U16BE(buf[10:12])
+	e.PreDefined = byteio.U16BE(buf[12:14])
+	e.Reserved2 = byteio.U16BE(buf[14:16])
+	e.TemplateSampleRate = byteio.U32BE(buf[16:20])
+
+	return
+}
+
+type EsdsBox struct {
+	*FullBox
+	EsDescr ES_Descriptor
+}
+
+func ParseEsdsBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewEsdsBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
+func NewEsdsBox(b *Box) *EsdsBox {
+	return &EsdsBox{
+		FullBox: &FullBox{
+			Box: b,
+		},
+	}
+}
+
+func (b *EsdsBox) Parse(r io.Reader) (totalReadLen int, err error) {
+
+	curReadLen := 0
+	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 0); err != nil {
+		return
+	}
+
+	bd := &BaseDescriptor{}
+	if curReadLen, err = bd.Parse(r); err != nil {
+		return
+	}
+	totalReadLen += curReadLen
+
+	b.EsDescr.BaseDescriptor = bd
+
+	if curReadLen, err = b.EsDescr.Parse(r); err != nil {
+		return
+	}
+	totalReadLen += curReadLen
+
+	return
+}
+
+func (b *EsdsBox) Serialize(w io.Writer) (writedLen int, err error) {
+
+	if writedLen, err = b.FullBox.Serialize(w); err != nil {
+		return
+	}
+
+	curWriteLen := 0
+	if curWriteLen, err = b.EsDescr.Serialize(w); err != nil {
+		return
+	}
+	writedLen += curWriteLen
+
 	return
 }

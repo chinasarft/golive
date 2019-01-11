@@ -1,7 +1,6 @@
 package mp4
 
 import (
-	"fmt"
 	"io"
 	//"github.com/chinasarft/golive/utils/byteio"
 )
@@ -39,12 +38,13 @@ func (b *MetaBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *MetaBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseMetaBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewMetaBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in meta box")
-		return
-	}
+func (b *MetaBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 0); err != nil {
 		return

@@ -1,7 +1,6 @@
 package mp4
 
 import (
-	"fmt"
 	"io"
 
 	"github.com/chinasarft/golive/utils/byteio"
@@ -61,12 +60,14 @@ func NewSidxBox(b *Box) *SidxBox {
 	}
 }
 
+func ParseSidxBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewSidxBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *SidxBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in sidx box")
-		return
-	}
 	curReadLen := 0
 	if totalReadLen, err = b.FullBox.Parse(r, 0, FULLBOX_ANY_VERSION, 0); err != nil {
 		return

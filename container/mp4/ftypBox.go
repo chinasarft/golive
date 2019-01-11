@@ -1,7 +1,6 @@
 package mp4
 
 import (
-	"fmt"
 	"io"
 
 	"github.com/chinasarft/golive/utils/byteio"
@@ -23,18 +22,26 @@ type FtypBox struct {
 	CompatibleBrands []uint32
 }
 
+type StypBox = FtypBox
+
 func NewFtypBox(b *Box) *FtypBox {
 	return &FtypBox{
 		Box: b,
 	}
 }
 
+func NewStypBox(b *Box) *FtypBox {
+	return NewFtypBox(b)
+}
+
+func ParseFtypBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewFtypBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *FtypBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in ftyp box")
-		return
-	}
 	var curReadLen int = 0
 	buf := make([]byte, 8)
 	if curReadLen, err = io.ReadFull(r, buf); err != nil {

@@ -1,7 +1,6 @@
 package mp4
 
 import (
-	"fmt"
 	"io"
 
 	"github.com/chinasarft/golive/utils/byteio"
@@ -23,19 +22,13 @@ aligned(8) class MovieFragmentBox extends Box(‘moof’){
 }
 */
 
-type MoofBox struct {
-	*Box
-	SubBoxes []IBox
-}
+type MoofBox = SimpleBoxContainer
 
 /*
 aligned(8) class TrackFragmentBox extends Box(‘traf’){
 }
 */
-type TrafBox struct {
-	*Box
-	SubBoxes []IBox
-}
+type TrafBox = SimpleBoxContainer
 
 /*
 aligned(8) class TrackFragmentHeaderBox
@@ -109,74 +102,12 @@ type TrunBox struct {
 }
 
 func NewMoofBox(b *Box) *MoofBox {
-	return &MoofBox{
-		Box: b,
-	}
+	return NewSimpleBoxContainer(b)
 }
 
-func (b *MoofBox) Serialize(w io.Writer) (writedLen int, err error) {
-
-	if writedLen, err = b.Box.Serialize(w); err != nil {
-		return
-	}
-
-	curWriteLen := 0
-	for i := 0; i < len(b.SubBoxes); i++ {
-		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
-			return
-		}
-		writedLen += curWriteLen
-	}
-
-	return
-}
-
-func (b *MoofBox) Parse(r io.Reader) (totalReadLen int, err error) {
-
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in moof box")
-		return
-	}
-
-	remainSize := int(b.Size - 8)
-	curReadLen := 0
-	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
-			return
-		}
-		totalReadLen += curReadLen
-		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeMFHD:
-			mfhdBox := NewMfhdBox(bb)
-			if curReadLen, err = mfhdBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, mfhdBox)
-		case BoxTypeTRAF:
-			trafBox := NewTrafBox(bb)
-			if curReadLen, err = trafBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, trafBox)
-		//case BoxTypeMETA:
-		default:
-			unsprtBox := NewUnsupporttedBox(bb)
-			if curReadLen, err = unsprtBox.Parse(r); err != nil {
-				return
-			}
-			b.SubBoxes = append(b.SubBoxes, unsprtBox)
-		}
-
-		if curReadLen > 0 {
-			totalReadLen += curReadLen
-			remainSize -= curReadLen
-		}
-
-	}
+func ParseMoofBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewMoofBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -204,12 +135,14 @@ func (b *MfhdBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
+func ParseMfhdBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewMfhdBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *MfhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in mfhd box")
-		return
-	}
 	curReadLen := 0
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, 0); err != nil {
 		return
@@ -227,72 +160,12 @@ func (b *MfhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
 }
 
 func NewTrafBox(b *Box) *TrafBox {
-	return &TrafBox{
-		Box: b,
-	}
+	return NewSimpleBoxContainer(b)
 }
 
-func (b *TrafBox) Serialize(w io.Writer) (writedLen int, err error) {
-
-	if writedLen, err = b.Box.Serialize(w); err != nil {
-		return
-	}
-
-	curWriteLen := 0
-	for i := 0; i < len(b.SubBoxes); i++ {
-		if curWriteLen, err = b.SubBoxes[i].Serialize(w); err != nil {
-			return
-		}
-		writedLen += curWriteLen
-	}
-
-	return
-}
-
-func (b *TrafBox) Parse(r io.Reader) (totalReadLen int, err error) {
-
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in traf box")
-		return
-	}
-
-	remainSize := int(b.Size - 8)
-	curReadLen := 0
-	for remainSize > 0 {
-
-		var bb *Box
-		if bb, curReadLen, err = ParseBox(r); err != nil {
-			return
-		}
-		remainSize -= curReadLen
-
-		switch bb.BoxType {
-		case BoxTypeTFHD:
-			tfhdBox := NewTfhdBox(bb)
-			if curReadLen, err = tfhdBox.Parse(r); err != nil {
-				return
-			}
-			remainSize -= curReadLen
-			b.SubBoxes = append(b.SubBoxes, tfhdBox)
-		case BoxTypeTFDT:
-			tfdtBox := NewTfdtBox(bb)
-			if curReadLen, err = tfdtBox.Parse(r); err != nil {
-				return
-			}
-			remainSize -= curReadLen
-			b.SubBoxes = append(b.SubBoxes, tfdtBox)
-		case BoxTypeTRUN:
-			trunBox := NewTrunBox(bb)
-			if curReadLen, err = trunBox.Parse(r); err != nil {
-				return
-			}
-			remainSize -= curReadLen
-			b.SubBoxes = append(b.SubBoxes, trunBox)
-
-		}
-
-	}
-	totalReadLen = int(b.Size - 8)
+func ParseTrafBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewTrafBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -343,12 +216,13 @@ func (b *TfhdBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *TfhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseTfhdBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewTfhdBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in tfhd box")
-		return
-	}
+func (b *TfhdBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	curReadLen := 0
 	if totalReadLen, err = b.FullBox.Parse(r, 0, !FULLBOX_ANY_VERSION, FULLBOX_ANY_FLAG); err != nil {
@@ -451,12 +325,13 @@ func (b *TfdtBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
-func (b *TfdtBox) Parse(r io.Reader) (totalReadLen int, err error) {
+func ParseTfdtBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewTfdtBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in tfdt box")
-		return
-	}
+func (b *TfdtBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
 	if totalReadLen, err = b.FullBox.Parse(r, 0, FULLBOX_ANY_VERSION, 0); err != nil {
 		return
@@ -531,12 +406,14 @@ func (b *TrunBox) Serialize(w io.Writer) (writedLen int, err error) {
 	return
 }
 
+func ParseTrunBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewTrunBox(box)
+	totalReadLen, err = b.Parse(r)
+	return
+}
+
 func (b *TrunBox) Parse(r io.Reader) (totalReadLen int, err error) {
 
-	if b.Size == 1 {
-		err = fmt.Errorf("large size in trun box")
-		return
-	}
 	curReadLen := 0
 	if totalReadLen, err = b.FullBox.Parse(r, 0, FULLBOX_ANY_VERSION, FULLBOX_ANY_FLAG); err != nil {
 		return

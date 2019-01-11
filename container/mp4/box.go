@@ -20,6 +20,8 @@ const (
 type IBox interface {
 	Parse(r io.Reader) (prasedLen int, err error)
 	GetBoxType() uint32
+	GetBoxSize() uint64
+	GetSubBoxes() []IBox
 	Serialize(w io.Writer) (writedLen int, err error)
 }
 
@@ -65,11 +67,70 @@ type UnsupporttedBox struct {
 	RawData []byte
 }
 
+type BoxParser func(r io.Reader, box *Box) (b IBox, readLen int, err error)
+
+var (
+	parseTable = map[uint32]BoxParser{
+		BoxTypeFTYP: ParseFtypBox,
+		BoxTypeSTYP: ParseFtypBox,
+		BoxTypeSIDX: ParseSidxBox,
+		BoxTypeMOOF: ParseMoofBox,
+		BoxTypeMFHD: ParseMfhdBox,
+		BoxTypeTRAF: ParseTrafBox,
+		BoxTypeTFHD: ParseTfhdBox,
+		BoxTypeTFDT: ParseTfdtBox,
+		BoxTypeTRUN: ParseTrunBox,
+		BoxTypeMVHD: ParseMvhdBox,
+		BoxTypeTRAK: ParseTrakBox,
+		BoxTypeTKHD: ParseTkhdBox,
+		BoxTypeEDTS: ParseEdtsBox,
+		BoxTypeMDIA: ParseMdiaBox,
+		BoxTypeMDHD: ParseMdhdBox,
+		BoxTypeHDLR: ParseHdlrBox,
+		BoxTypeMINF: ParseMinfBox,
+		BoxTypeVMHD: ParseVmhdBox,
+		BoxTypeDINF: ParseDinfBox,
+		BoxTypeDREF: ParseDrefBox,
+		BoxTypeMVEX: ParseMvexBox,
+		BoxTypeUDTA: ParseUdtaBox,
+		BoxTypeSTBL: ParseStblBox,
+		BoxTypeSTSD: ParseStsdBox,
+		BoxTypeSTTS: ParseSttsBox,
+		BoxTypeSTSC: ParseStscBox,
+		BoxTypeSTSZ: ParseStszBox,
+		BoxTypeSTZ2: ParseStszBox,
+		BoxTypeSTCO: ParseStcoBox,
+		BoxTypeELST: ParseElstBox,
+		BoxTypeTREX: ParseTrexBox,
+		BoxTypeMETA: ParseMetaBox,
+		BoxTypeURL:  ParseUrlBox,
+		BoxTypeURN:  ParseUrnBox,
+		BoxTypeAVC1: ParseAvc1Box,
+		BoxTypeMP4A: ParseMp4aBox,
+		BoxTypeHEV1: ParseHev1Box,
+		BoxTypePASP: ParsePaspBox,
+		BoxTypeESDS: ParseEsdsBox,
+		BoxTypeSMHD: ParseSmhdBox,
+		BoxTypeMFRA: ParseMfraBox,
+		BoxTypeTFRA: ParseTfraBox,
+		BoxTypeMFRO: ParseMfroBox,
+	}
+)
+
+func getParser(boxType uint32) BoxParser {
+	if parser, ok := parseTable[boxType]; ok {
+		return parser
+	}
+
+	return ParseUnsupporttedBox
+}
+
 func NewUnsupporttedBox(b *Box) *UnsupporttedBox {
 	return &UnsupporttedBox{
 		Box: b,
 	}
 }
+
 func (b *UnsupporttedBox) Serialize(w io.Writer) (writedLen int, err error) {
 
 	if writedLen, err = b.Box.Serialize(w); err != nil {
@@ -84,6 +145,12 @@ func (b *UnsupporttedBox) Serialize(w io.Writer) (writedLen int, err error) {
 		writedLen += curWriteLen
 	}
 
+	return
+}
+
+func ParseUnsupporttedBox(r io.Reader, box *Box) (b IBox, totalReadLen int, err error) {
+	b = NewUnsupporttedBox(box)
+	totalReadLen, err = b.Parse(r)
 	return
 }
 
@@ -147,6 +214,26 @@ func NewBox() *Box {
 	return &Box{}
 }
 
+func NewTypeBox(boxType uint32) *Box {
+	b := &Box{
+		BoxType: boxType,
+		Size:    uint64(BOX_SIZE),
+	}
+	b.setTypeName()
+	return b
+}
+
+func NewTypeFullBox(boxType uint32, verion uint8, flags uint32) *FullBox {
+
+	b := &FullBox{
+		Box:        NewTypeBox(boxType),
+		version:    verion,
+		flags24Bit: flags,
+	}
+	b.Size = uint64(FULL_BOX_SIZE)
+	return b
+}
+
 func ParseBox(r io.Reader) (b *Box, readLen int, err error) {
 	var arr [8]byte
 	buf := arr[0:8]
@@ -160,12 +247,29 @@ func ParseBox(r io.Reader) (b *Box, readLen int, err error) {
 	}
 	readLen = 8
 
-	b.TypeName = string(buf[4:8])
+	b.setTypeName()
+	if b.Size == 1 && b.BoxType != BoxTypeMDAT {
+		err = fmt.Errorf("large size in %s box", b.TypeName)
+	}
 	return
+}
+
+func (b *Box) setTypeName() {
+	buf := []byte{0, 0, 0, 0}
+	byteio.PutU32BE(buf, b.BoxType)
+	b.TypeName = string(buf)
 }
 
 func (b *Box) GetBoxType() uint32 {
 	return b.BoxType
+}
+
+func (b *Box) GetBoxSize() uint64 {
+	return b.Size
+}
+
+func (b *Box) GetSubBoxes() []IBox {
+	return nil
 }
 
 func (b *Box) Serialize(w io.Writer) (writedLen int, err error) {
@@ -202,11 +306,11 @@ func (b *Box) GetBoxTypeName() string {
 	return string(arr[0:4])
 }
 
-func (b *Box) Parse(r io.Reader) (res IBox, parsedLen int, err error) {
+func (b *Box) Parse(r io.Reader) (res IBox, totalReadLen int, err error) {
 	var arr [8]byte
 	buf := arr[0:8]
 
-	if _, err = io.ReadFull(r, buf); err != nil {
+	if totalReadLen, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 
@@ -214,38 +318,40 @@ func (b *Box) Parse(r io.Reader) (res IBox, parsedLen int, err error) {
 	b.BoxType = byteio.U32BE(buf[4:8])
 	b.TypeName = string(buf[4:8])
 
+	parsedLen := 0
 	switch b.BoxType {
 	case BoxTypeFTYP:
 		ftypBox := NewFtypBox(b)
 		parsedLen, err = ftypBox.Parse(r)
 		res = ftypBox
-		return
 	case BoxTypeSTYP:
 		stypBox := NewStypBox(b)
 		parsedLen, err = stypBox.Parse(r)
 		res = stypBox
-		return
 	case BoxTypeSIDX:
 		sidxBox := NewSidxBox(b)
 		parsedLen, err = sidxBox.Parse(r)
 		res = sidxBox
-		return
 	case BoxTypeMOOF:
 		moofBox := NewMoofBox(b)
 		parsedLen, err = moofBox.Parse(r)
 		res = moofBox
-		return
 	case BoxTypeMDAT:
 		mdatBox := NewMdatBox(b)
 		parsedLen, err = mdatBox.Parse(r)
 		res = mdatBox
-		return
 	case BoxTypeMOOV:
 		moovBox := NewMoovBox(b)
 		parsedLen, err = moovBox.Parse(r)
 		res = moovBox
-		return
+	case BoxTypeMFRA:
+		mfraBox := NewMfraBox(b)
+		parsedLen, err = mfraBox.Parse(r)
+		res = mfraBox
+	default:
+		err = fmt.Errorf("no such box:%s", b.TypeName)
 	}
+	totalReadLen += parsedLen
 
 	return
 }
