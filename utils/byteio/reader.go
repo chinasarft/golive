@@ -122,6 +122,16 @@ func U64BE(b []byte) (i uint64) {
 	return
 }
 
+func UVarBE(b []byte) (i uint64) {
+	j := 0
+	for j = 0; j < len(b)-1; j++ {
+		i = uint64(b[j])
+		i <<= 8
+	}
+	i |= uint64(b[j])
+	return
+}
+
 func I64BE(b []byte) (i int64) {
 	i = int64(int8(b[0]))
 	i <<= 8

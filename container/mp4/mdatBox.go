@@ -43,3 +43,18 @@ func (b *MdatBox) Parse(r io.Reader) (totalReadLen int, err error) {
 	totalReadLen += curReadLen
 	return
 }
+
+func (b *MdatBox) Serialize(w io.Writer) (writedLen int, err error) {
+
+	if writedLen, err = b.Box.Serialize(w); err != nil {
+		return
+	}
+
+	curWriteLen := 0
+	if curWriteLen, err = w.Write(b.Data); err != nil {
+		return
+	}
+	writedLen += curWriteLen
+
+	return
+}

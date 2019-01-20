@@ -64,7 +64,7 @@ aligned(8) class TrackFragmentBaseMediaDecodeTimeBox
 */
 type TfdtBox struct {
 	*FullBox
-	BaseMediaDecodeTime uint64
+	BaseMediaDecodeTime uint64 // 就是当前mdat的起始时间戳，单位是对应track的timescale
 }
 
 /*

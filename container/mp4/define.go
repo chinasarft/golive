@@ -79,14 +79,22 @@ const (
 )
 
 const (
-	MvhdBoxBodyLenVer0 = 96
-	MvhdBoxBodyLenVer1 = 108
-	TkhdBoxBodyLenVer0 = 80
-	TkhdBoxBodyLenVer1 = 92
-	SmhdBoxBodyLen     = 4
-	VmhdBoxBodyLen     = 8
-	MdhdBoxBodyLenVer0 = 20
-	MdhdBoxBodyLenVer1 = 32
+	MvhdBoxBodyLenVer0   = 96
+	MvhdBoxBodyLenVer1   = 108
+	TkhdBoxBodyLenVer0   = 80
+	TkhdBoxBodyLenVer1   = 92
+	SmhdBoxBodyLen       = 4
+	VmhdBoxBodyLen       = 8
+	MdhdBoxBodyLenVer0   = 20
+	MdhdBoxBodyLenVer1   = 32
+	PaspBoxBodyLen       = 8
+	SampleEntryLen       = 8
+	VisualSampleEntryLen = 70
+	AudioSampleEntryLen  = 20
+	TrexBoxBodyLen       = 20
+	MfhdBoxBodyLen       = 4
+	TfdtBoxBodyLenVer0   = 4
+	TfdtBoxBodyLenVer1   = 8
 )
 
 /**

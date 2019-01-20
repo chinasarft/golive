@@ -38,6 +38,14 @@ func PutU32BE(b []byte, v uint32) {
 	b[3] = byte(v)
 }
 
+func PutU40BE(b []byte, v uint64) {
+	b[0] = byte(v >> 32)
+	b[1] = byte(v >> 24)
+	b[2] = byte(v >> 16)
+	b[3] = byte(v >> 8)
+	b[4] = byte(v)
+}
+
 func PutU48BE(b []byte, v uint64) {
 	b[0] = byte(v >> 40)
 	b[1] = byte(v >> 32)
@@ -45,6 +53,16 @@ func PutU48BE(b []byte, v uint64) {
 	b[3] = byte(v >> 16)
 	b[4] = byte(v >> 8)
 	b[5] = byte(v)
+}
+
+func PutU56BE(b []byte, v uint64) {
+	b[0] = byte(v >> 48)
+	b[1] = byte(v >> 40)
+	b[2] = byte(v >> 32)
+	b[3] = byte(v >> 24)
+	b[4] = byte(v >> 16)
+	b[5] = byte(v >> 8)
+	b[6] = byte(v)
 }
 
 func PutU32LE(b []byte, v uint32) {

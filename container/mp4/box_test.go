@@ -959,7 +959,7 @@ func TestParseMfraBox(t *testing.T) {
 	if parsedLen != len(msgByte) {
 		t.Errorf("parsedLen:%d expect:%d", parsedLen, len(msgByte))
 	}
-	PrintBox(mfraBox)
+	//PrintBox(mfraBox)
 
 	w := &bytes.Buffer{}
 	writedLen, err := mfraBox.Serialize(w)

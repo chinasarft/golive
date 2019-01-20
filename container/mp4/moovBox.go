@@ -108,7 +108,7 @@ type TkhdBox struct {
 	TemplateVolume         int16
 	Reserved3              int16
 	TemplateMatrix         [9]int32
-	Width                  uint32
+	Width                  uint32 // fixed-point 16.16 values
 	Height                 uint32
 }
 
@@ -354,8 +354,11 @@ type AVCCConfigurationBox struct {
 }
 type AVCSampleEntry struct {
 	VisualSampleEntry
-	AVCCConfigurationBox
+	*AVCCConfigurationBox
 }
+
+// 这里说明下，AVCSampleEntry定义包含AVCCConfigurationBox
+// 所以解析时候放没有到了SubBoxes
 type Avc1Box struct {
 	*Box
 	AVCEntry AVCSampleEntry
@@ -390,12 +393,12 @@ class AudioSampleEntry(codingname) extends SampleEntry (codingname){
 */
 type AudioSampleEntry struct {
 	SampleEntry
-	Reserved1          [2]uint32
-	Channles           uint16
-	SampleRate         uint16
-	PreDefined         uint16
-	Reserved2          uint16
-	TemplateSampleRate uint32
+	Reserved1            [2]uint32
+	TemplateChannelCount uint16
+	TemplateSampleSize   uint16
+	PreDefined           uint16
+	Reserved2            uint16
+	TemplateSampleRate   uint32
 }
 type Mp4aBox struct {
 	*Box
@@ -1529,7 +1532,7 @@ func (e *VisualSampleEntry) serialize(w io.Writer) (writedLen int, err error) {
 	}
 
 	curWriteLen := 0
-	buf := make([]byte, 70) // 70 == VisualSampleEntry
+	buf := make([]byte, VisualSampleEntryLen)
 
 	byteio.PutU16BE(buf[0:2], e.PreDefined1)
 	byteio.PutU16BE(buf[2:4], e.Reserved1)
@@ -1601,12 +1604,21 @@ func (e *VisualSampleEntry) parse(r io.Reader) (totalReadLen int, err error) {
 
 func (b *Avc1Box) Serialize(w io.Writer) (writedLen int, err error) {
 
+	if b.AVCEntry.AVCCConfigurationBox == nil {
+		err = fmt.Errorf("AVCCConfigurationBox is nil")
+		return
+	}
 	if writedLen, err = b.Box.Serialize(w); err != nil {
 		return
 	}
 
 	curWriteLen := 0
 	if curWriteLen, err = b.AVCEntry.serialize(w); err != nil {
+		return
+	}
+	writedLen += curWriteLen
+
+	if curWriteLen, err = b.AVCEntry.AVCCConfigurationBox.Serialize(w); err != nil {
 		return
 	}
 	writedLen += curWriteLen
@@ -1646,8 +1658,8 @@ func (b *Avc1Box) Parse(r io.Reader) (totalReadLen int, err error) {
 		if curReadLen, err = avcCBox.Parse(r); err != nil {
 			return
 		}
-		b.SubBoxes = append(b.SubBoxes, avcCBox)
-
+		//b.SubBoxes = append(b.SubBoxes, avcCBox)
+		b.AVCEntry.AVCCConfigurationBox = avcCBox
 	default:
 		unsprtBox := NewUnsupporttedBox(bb)
 		if curReadLen, err = unsprtBox.Parse(r); err != nil {
@@ -2112,7 +2124,7 @@ func (b *TrexBox) Parse(r io.Reader) (totalReadLen int, err error) {
 		return
 	}
 
-	buf := make([]byte, 20)
+	buf := make([]byte, TrexBoxBodyLen)
 
 	curReadLen := 0
 	if curReadLen, err = io.ReadFull(r, buf); err != nil {
@@ -2254,7 +2266,7 @@ func (e *AudioSampleEntry) serialize(w io.Writer) (writedLen int, err error) {
 	nums := []uint32{
 		e.Reserved1[0],
 		e.Reserved1[1],
-		uint32(e.Channles)<<16 | uint32(e.SampleRate),
+		uint32(e.TemplateChannelCount)<<16 | uint32(e.TemplateSampleSize),
 		uint32(e.PreDefined)<<16 | uint32(e.Reserved2),
 		e.TemplateSampleRate,
 	}
@@ -2281,8 +2293,8 @@ func (e *AudioSampleEntry) parse(r io.Reader) (totalReadLen int, err error) {
 
 	e.Reserved1[0] = byteio.U32BE(buf)
 	e.Reserved1[1] = byteio.U32BE(buf[4:8])
-	e.Channles = byteio.U16BE(buf[8:10])
-	e.SampleRate = byteio.U16BE(buf[10:12])
+	e.TemplateChannelCount = byteio.U16BE(buf[8:10])
+	e.TemplateSampleSize = byteio.U16BE(buf[10:12])
 	e.PreDefined = byteio.U16BE(buf[12:14])
 	e.Reserved2 = byteio.U16BE(buf[14:16])
 	e.TemplateSampleRate = byteio.U32BE(buf[16:20])
