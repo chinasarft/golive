@@ -8,17 +8,10 @@ import (
 	"log"
 	"reflect"
 
+	"github.com/chinasarft/golive/exchange"
 	"github.com/chinasarft/golive/utils/amf"
 	"github.com/chinasarft/golive/utils/byteio"
 )
-
-type PutAVDMessage func(m *Message) error
-type Pad interface {
-	OnSourceDetermined(h *RtmpHandler, ctx context.Context) (PutAVDMessage, error)
-	OnSinkDetermined(h *RtmpHandler, ctx context.Context) error
-	OnDestroySource(h *RtmpHandler)
-	OnDestroySink(h *RtmpHandler)
-}
 
 type ConnectCmdParam struct {
 	PublishName string //stream name
@@ -59,13 +52,13 @@ type RtmpHandler struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	role   string
-	pad    Pad
-	putMsg PutAVDMessage
+	pad    exchange.Pad
+	putMsg exchange.PutData
 
 	status int // 做一个状态机？
 }
 
-func NewRtmpHandler(rw io.ReadWriter, pad Pad) *RtmpHandler {
+func NewRtmpHandler(rw io.ReadWriter, pad exchange.Pad) *RtmpHandler {
 	return &RtmpHandler{
 		chunkUnpacker: NewChunkUnpacker(),
 		chunkPacker:   NewChunkPacker(),
@@ -269,7 +262,7 @@ func (h *RtmpHandler) handleDataMessage(m *DataMessage) (err error) {
 					err = h.handleSetDataFrame(r, m)
 					// @setDataFrame固定长度是16字节
 					if err == nil {
-						if err = h.putMsg((*Message)(m)); err != nil {
+						if err = h.rtmpMessageToExData((*Message)(m)); err != nil {
 							return
 						}
 					}
@@ -295,7 +288,7 @@ func (h *RtmpHandler) handleVideoMessage(m *VideoMessage) error {
 		//log.Println("receive metavideo and put:", len(m.Payload), m.Payload[0])
 	}
 	//log.Println("receive video and put:", len(m.Payload), m.Payload[0], m.Timestamp)
-	if err := h.putMsg((*Message)(m)); err != nil {
+	if err := h.rtmpMessageToExData((*Message)(m)); err != nil {
 		return err
 	}
 
@@ -310,7 +303,7 @@ func (h *RtmpHandler) handleAudioMessage(m *AudioMessage) error {
 	}
 
 	//log.Println("receive audio and put:", len(m.Payload), m.Timestamp)
-	if err := h.putMsg((*Message)(m)); err != nil {
+	if err := h.rtmpMessageToExData((*Message)(m)); err != nil {
 		return err
 	}
 
@@ -699,7 +692,7 @@ func (h *RtmpHandler) handlePlayCommand(r amf.Reader, m *CommandMessage) error {
 }
 
 func (h *RtmpHandler) WriteMessage(m *Message) error {
-
+	m.StreamID = h.GetFunctionalStreamId()
 	return h.chunkPacker.WriteMessage(h.rw, m)
 }
 
@@ -760,4 +753,77 @@ func (h *RtmpHandler) handleSetDataFrame(r amf.Reader, m *DataMessage) error {
 	}
 
 	return nil
+}
+
+func (h *RtmpHandler) rtmpMessageToExData(m *Message) error {
+	d := &exchange.ExData{
+		Timestamp:      uint64(m.Timestamp),
+		OriginProtocol: exchange.ProtocolRTMP,
+		Payload:        m.Payload,
+	}
+
+	switch m.MessageType {
+	case 8:
+		if m.Payload[1] == 0 {
+			fmt.Printf("==========>aconfig:%d %d\n", m.Payload[1], m.MessageType)
+			d.DataType = exchange.DataTypeAudioConfig
+		} else {
+			d.DataType = exchange.DataTypeAudio
+		}
+		d.AvFormat = exchange.AvFormatAAC
+	case 9:
+		isKeyFrame := ((uint8(m.Payload[0]) & 0xF0) == 0x10)
+		vType := exchange.DataTypeVideoNonKeyFrame
+		if uint8(m.Payload[1]) == 0 {
+			fmt.Printf("==========>vconfig:%d %d\n", m.Payload[1], m.MessageType)
+			vType = exchange.DataTypeVideoConfig
+		} else if isKeyFrame {
+			vType = exchange.DataTypeVideoKeyFrame
+		}
+		d.DataType = vType
+
+		if (uint8(m.Payload[0]) & 0x0F) == 0x07 {
+			d.AvFormat = exchange.AvFormatAVC
+		} else {
+			d.AvFormat = exchange.AvFormatHEVC
+		}
+	case 15:
+		d.AvFormat = exchange.AvFormatData
+		d.DataType = exchange.DataTypeDataAMF3
+	case 18:
+		d.AvFormat = exchange.AvFormatData
+		d.DataType = exchange.DataTypeDataAMF0
+	default:
+		panic("no such message type")
+	}
+
+	return h.putMsg(d)
+}
+
+func (h *RtmpHandler) WriteData(d *exchange.ExData) error {
+	m := &Message{
+		Payload:   d.Payload,
+		Timestamp: uint32(d.Timestamp),
+	}
+	switch d.DataType {
+	case exchange.DataTypeAudio:
+		fallthrough
+	case exchange.DataTypeAudioConfig:
+		m.MessageType = TYPE_AUDIO
+	case exchange.DataTypeVideo:
+		fallthrough
+	case exchange.DataTypeVideoKeyFrame:
+		fallthrough
+	case exchange.DataTypeVideoNonKeyFrame:
+		fallthrough
+	case exchange.DataTypeVideoConfig:
+		m.MessageType = TYPE_VIDEO
+	case exchange.DataTypeDataAMF0:
+		m.MessageType = TYPE_CMDMSG_AMF0
+	case exchange.DataTypeDataAMF3:
+		m.MessageType = TYPE_CMDMSG_AMF3
+	default:
+		panic("no such data type")
+	}
+	return h.chunkPacker.WriteMessage(h.rw, m)
 }

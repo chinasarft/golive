@@ -1,4 +1,4 @@
-package rtmpserver
+package exchange
 
 import (
 	"bytes"
@@ -7,14 +7,27 @@ import (
 	"io"
 	"log"
 
-	"github.com/chinasarft/golive/protocol/rtmp"
 	"github.com/chinasarft/golive/utils/amf"
 )
+
+type PutData func(m *ExData) error
+type Pad interface {
+	OnSourceDetermined(h StreamHandler, ctx context.Context) (PutData, error)
+	OnSinkDetermined(h StreamHandler, ctx context.Context) error
+	OnDestroySource(h StreamHandler)
+	OnDestroySink(h StreamHandler)
+}
+
+type StreamHandler interface {
+	GetAppStreamKey() string
+	Cancel()
+	WriteData(m *ExData) error
+}
 
 const (
 	cmd_register_source = iota
 	cmd_register_sink
-	cmd_rtmp_message
+	cmd_data_message
 	cmd_unregister_source
 	cmd_unregister_sink
 )
@@ -26,7 +39,7 @@ type PadMessage struct {
 }
 
 type Source struct {
-	*rtmp.RtmpHandler
+	StreamHandler
 	srcChan chan *PadMessage
 	result  chan error
 	sinks   map[string]*Sink
@@ -38,10 +51,10 @@ type Source struct {
 }
 
 type Sink struct {
-	*rtmp.RtmpHandler
-	result      chan error
-	rtmpMsgChan chan *rtmp.Message
-	keyInSrc    string
+	StreamHandler
+	result   chan error
+	msgChan  chan *ExData
+	keyInSrc string
 }
 
 type ConnPool struct {
@@ -59,6 +72,10 @@ func init() {
 		waitingSenders: make(map[string]map[string]*PadMessage),
 	}
 	go conns.pairPad()
+}
+
+func GetExchanger() *ConnPool {
+	return conns
 }
 
 func (p *ConnPool) pairPad() {
@@ -81,13 +98,13 @@ func (p *ConnPool) pairPad() {
 	}
 }
 
-func (cp *ConnPool) OnSourceDetermined(h *rtmp.RtmpHandler, ctx context.Context) (rtmp.PutAVDMessage, error) {
+func (cp *ConnPool) OnSourceDetermined(h StreamHandler, ctx context.Context) (PutData, error) {
 
 	src := &Source{
-		RtmpHandler: h,
-		result:      make(chan error),
-		sinks:       make(map[string]*Sink),
-		srcChan:     make(chan *PadMessage, 100),
+		StreamHandler: h,
+		result:        make(chan error),
+		sinks:         make(map[string]*Sink),
+		srcChan:       make(chan *PadMessage, 100),
 	}
 	conns.pipe <- &PadMessage{
 		cmd: cmd_register_source,
@@ -98,13 +115,14 @@ func (cp *ConnPool) OnSourceDetermined(h *rtmp.RtmpHandler, ctx context.Context)
 	// 同步返回结果
 	err := <-src.result
 
-	output := func(m *rtmp.Message) error {
+	output := func(m *ExData) error {
 		if src.err != nil {
 			return src.err
 		}
+
 		select {
 		case src.srcChan <- &PadMessage{
-			cmd: cmd_rtmp_message,
+			cmd: cmd_data_message,
 			msg: m,
 		}:
 			//log.Println("--------->put message")
@@ -165,8 +183,8 @@ func (s *Source) work(ctx context.Context) {
 		switch msg.cmd {
 		case cmd_register_sink:
 			s.connectSink(msg)
-		case cmd_rtmp_message:
-			rtmpMsg, ok := msg.msg.(*rtmp.Message)
+		case cmd_data_message:
+			rtmpMsg, ok := msg.msg.(*ExData)
 			if !ok {
 				panic("not rtmp message")
 			}
@@ -178,32 +196,28 @@ func (s *Source) work(ctx context.Context) {
 	}
 }
 
-func (src *Source) handleRtmpMessage(m *rtmp.Message) {
-	switch m.MessageType {
-	case 8:
-		if m.Payload[1] == 0 {
-			src.AACSequenceHeader = m.Payload
-		}
-	case 9:
-		if m.Payload[1] == 0 {
-			src.VideoDecoderConfigurationRecord = m.Payload
-		}
+func (src *Source) handleRtmpMessage(m *ExData) {
+	//fmt.Printf("==========>handle msg:%d %d\n", m.Payload[1], m.DataType)
+	switch m.DataType {
+	case DataTypeAudioConfig:
+		src.AACSequenceHeader = m.Payload
+	case DataTypeVideoConfig:
+		src.VideoDecoderConfigurationRecord = m.Payload
 	case 15:
 		fallthrough
 	case 18:
 		src.handleDataMessaage(m)
 	}
-	src.writeMessage(m)
+	src.writeData(m)
 }
 
-func (src *Source) writeMessage(m *rtmp.Message) {
+func (src *Source) writeData(m *ExData) {
 	for _, sink := range src.sinks {
-		toSinkMsg := new(rtmp.Message)
-		toSinkMsg.MessageType = m.MessageType
+		toSinkMsg := new(ExData)
+		toSinkMsg.DataType = m.DataType
 		toSinkMsg.Payload = m.Payload
 		toSinkMsg.Timestamp = m.Timestamp
-		toSinkMsg.StreamID = sink.GetFunctionalStreamId()
-		err := sink.writeMessage(toSinkMsg)
+		err := sink.writeData(toSinkMsg)
 		if err != nil {
 			// TODO cancel?
 			log.Println(err)
@@ -213,16 +227,16 @@ func (src *Source) writeMessage(m *rtmp.Message) {
 	}
 }
 
-func (sink *Sink) writeMessage(m *rtmp.Message) error {
+func (sink *Sink) writeData(m *ExData) error {
 	select {
-	case sink.rtmpMsgChan <- m:
+	case sink.msgChan <- m:
 		return nil
 	default:
 		return fmt.Errorf("sink rtmpMsgChan full")
 	}
 }
 
-func (src *Source) handleDataMessaage(m *rtmp.Message) {
+func (src *Source) handleDataMessaage(m *ExData) {
 	r := bytes.NewReader(m.Payload)
 	v, e := amf.ReadValue(r)
 	if e == nil {
@@ -245,7 +259,7 @@ func (src *Source) handleDataMessaage(m *rtmp.Message) {
 
 func (p *ConnPool) handleUnregisterSource(msg *PadMessage) {
 
-	h, ok := msg.msg.(*rtmp.RtmpHandler)
+	h, ok := msg.msg.(StreamHandler)
 	if !ok {
 		panic("handleUnegisterSource wrong type")
 	}
@@ -261,7 +275,7 @@ func (p *ConnPool) handleUnregisterSource(msg *PadMessage) {
 	}
 }
 
-func (cp *ConnPool) OnDestroySource(h *rtmp.RtmpHandler) {
+func (cp *ConnPool) OnDestroySource(h StreamHandler) {
 
 	cp.pipe <- &PadMessage{
 		cmd: cmd_unregister_source,
@@ -271,12 +285,12 @@ func (cp *ConnPool) OnDestroySource(h *rtmp.RtmpHandler) {
 	return
 }
 
-func (cp *ConnPool) OnSinkDetermined(h *rtmp.RtmpHandler, ctx context.Context) error {
+func (cp *ConnPool) OnSinkDetermined(h StreamHandler, ctx context.Context) error {
 
 	sink := &Sink{
-		RtmpHandler: h,
-		result:      make(chan error),
-		rtmpMsgChan: make(chan *rtmp.Message, 50),
+		StreamHandler: h,
+		result:        make(chan error),
+		msgChan:       make(chan *ExData, 50),
 	}
 	cp.pipe <- &PadMessage{
 		cmd: cmd_register_sink,
@@ -313,7 +327,7 @@ func (p *ConnPool) handleRegisterSink(msg *PadMessage) {
 
 func (p *ConnPool) addObserver(sink *Sink, msg *PadMessage) {
 	key := sink.GetAppStreamKey()
-	sink.keyInSrc = key + fmt.Sprintf("%p", sink.RtmpHandler)
+	sink.keyInSrc = key + fmt.Sprintf("%p", sink.StreamHandler)
 	if waitingSource, sourceExits := p.waitingSenders[key]; sourceExits {
 		if waitingSource[sink.keyInSrc] != nil {
 			panic(sink.keyInSrc + " has waited")
@@ -328,7 +342,7 @@ func (p *ConnPool) addObserver(sink *Sink, msg *PadMessage) {
 }
 
 func (p *ConnPool) handleUnregisterSink(msg *PadMessage) {
-	h, ok := msg.msg.(*rtmp.RtmpHandler)
+	h, ok := msg.msg.(StreamHandler)
 	if !ok {
 		panic("handleRegisterSource wrong type")
 	}
@@ -348,7 +362,7 @@ func (p *ConnPool) handleUnregisterSink(msg *PadMessage) {
 	}
 }
 
-func (p *ConnPool) deleteObserver(h *rtmp.RtmpHandler) bool {
+func (p *ConnPool) deleteObserver(h StreamHandler) bool {
 	key := h.GetAppStreamKey()
 	if waitingSource, ok := p.waitingSenders[key]; ok {
 		keyInSrc := key + fmt.Sprintf("%p", h)
@@ -361,7 +375,7 @@ func (p *ConnPool) deleteObserver(h *rtmp.RtmpHandler) bool {
 	return false
 }
 
-func (hs *ConnPool) OnDestroySink(h *rtmp.RtmpHandler) {
+func (hs *ConnPool) OnDestroySink(h StreamHandler) {
 	conns.pipe <- &PadMessage{
 		cmd: cmd_unregister_sink,
 		msg: h,
@@ -377,9 +391,9 @@ func (sink *Sink) work(ctx context.Context) {
 		case <-ctx.Done():
 			log.Println("sink work quit------->")
 			return
-		case m := <-sink.rtmpMsgChan:
+		case m := <-sink.msgChan:
 			//log.Println("=======>receive message")
-			sink.WriteMessage(m)
+			sink.WriteData(m)
 		}
 	}
 }
@@ -387,7 +401,7 @@ func (sink *Sink) work(ctx context.Context) {
 func (src *Source) connectSink(msg *PadMessage) {
 	log.Println("src connectSink")
 	sink := msg.msg.(*Sink)
-	sink.keyInSrc = sink.GetAppStreamKey() + fmt.Sprintf("%p", sink.RtmpHandler)
+	sink.keyInSrc = sink.GetAppStreamKey() + fmt.Sprintf("%p", sink.StreamHandler)
 
 	if _, ok := src.sinks[sink.keyInSrc]; !ok {
 		src.sinks[sink.keyInSrc] = sink
@@ -396,34 +410,31 @@ func (src *Source) connectSink(msg *PadMessage) {
 	}
 
 	if src.avMetaData != nil {
-		avMetaData := &rtmp.Message{
-			MessageType: 0x12,
-			Timestamp:   0,
-			StreamID:    sink.GetFunctionalStreamId(),
-			Payload:     src.avMetaData,
+		avMetaData := &ExData{
+			DataType:  0x12,
+			Timestamp: 0,
+			Payload:   src.avMetaData,
 		}
-		sink.rtmpMsgChan <- avMetaData
+		sink.msgChan <- avMetaData
 	}
 
 	if src.AACSequenceHeader != nil {
-		amsg := &rtmp.Message{
-			MessageType: rtmp.TYPE_AUDIO,
-			Timestamp:   0,
-			StreamID:    sink.GetFunctionalStreamId(),
-			Payload:     src.AACSequenceHeader,
+		amsg := &ExData{
+			DataType:  DataTypeAudio,
+			Timestamp: 0,
+			Payload:   src.AACSequenceHeader,
 		}
-		sink.rtmpMsgChan <- amsg
+		sink.msgChan <- amsg
 		log.Println("=======>write audio metadata", len(amsg.Payload))
 	}
 
 	if src.VideoDecoderConfigurationRecord != nil {
-		vmsg := &rtmp.Message{
-			MessageType: rtmp.TYPE_VIDEO,
-			Timestamp:   0,
-			StreamID:    sink.GetFunctionalStreamId(),
-			Payload:     src.VideoDecoderConfigurationRecord,
+		vmsg := &ExData{
+			DataType:  DataTypeVideo,
+			Timestamp: 0,
+			Payload:   src.VideoDecoderConfigurationRecord,
 		}
-		sink.rtmpMsgChan <- vmsg
+		sink.msgChan <- vmsg
 		log.Println("=======>write video metadata", len(vmsg.Payload))
 	}
 
@@ -431,7 +442,7 @@ func (src *Source) connectSink(msg *PadMessage) {
 
 func (src *Source) deleteSink(msg *PadMessage) {
 
-	h := msg.msg.(*rtmp.RtmpHandler)
+	h := msg.msg.(StreamHandler)
 	keyInSrc := h.GetAppStreamKey() + fmt.Sprintf("%p", h)
 
 	sink, ok := src.sinks[keyInSrc]

@@ -1,4 +1,4 @@
-package rtmpserver
+package flvserver
 
 import (
 	"bufio"
@@ -7,19 +7,7 @@ import (
 	"time"
 
 	"github.com/chinasarft/golive/exchange"
-	"github.com/chinasarft/golive/protocol/rtmp"
-)
-
-const (
-	_ = iota
-	typeSetChunkSize
-	typeAbortMessage
-	typeAck
-	typeUserControlMessages
-	typeWindowAckSize
-	typeSetPeerBandwidth
-	typeCommandMessageAMF0 = 17
-	typeCommandMessageAMF3 = 20
+	"github.com/chinasarft/golive/protocol/flvlive"
 )
 
 var (
@@ -34,7 +22,7 @@ type NetConnWrapper struct {
 
 type conn struct {
 	*NetConnWrapper
-	*rtmp.RtmpHandler
+	*flvlive.FlvLiveHandler
 }
 
 func NewNetConnWrapper(c net.Conn, bufSize int) *NetConnWrapper {
@@ -71,7 +59,7 @@ func NewConn(netConn net.Conn, bufSize int) *conn {
 	cw := NewNetConnWrapper(netConn, bufSize)
 	c := &conn{
 		NetConnWrapper: cw,
-		RtmpHandler:    rtmp.NewRtmpHandler(cw, exchange.GetExchanger()),
+		FlvLiveHandler: flvlive.NewFlvLiveHandler(cw, exchange.GetExchanger()),
 	}
 
 	return c
