@@ -30,6 +30,13 @@ func startRTMP() {
 	}
 }
 
+func startRTMPS() {
+	err := rtmpserver.ListenAndServeTls("", nil)
+	if err != nil {
+		log.Println("fail to start rtmp:", err)
+	}
+}
+
 func startFlvLive() {
 	err := flvserver.ListenAndServe("", nil)
 	if err != nil {
@@ -50,5 +57,6 @@ func main() {
 	log.Println("rtmp server starting...")
 
 	go startRTMP()
+	go startRTMPS()
 	startFlvLive()
 }

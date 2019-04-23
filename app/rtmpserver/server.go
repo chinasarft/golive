@@ -1,6 +1,7 @@
 package rtmpserver
 
 import (
+	"crypto/tls"
 	"errors"
 	"log"
 	"net"
@@ -32,6 +33,22 @@ type Server struct {
 func ListenAndServe(addr string, handler Handler) error {
 	server := Server{Addr: addr, Handler: handler}
 	return server.ListenAndServe()
+}
+
+func ListenAndServeTls(addr string, handler Handler) error {
+	server := Server{Addr: addr, Handler: handler}
+
+	cert, err := tls.LoadX509KeyPair("./cert.pem", "./prikey.pem")
+	if err != nil {
+		return err
+	}
+	cfg := &tls.Config{Certificates: []tls.Certificate{cert}}
+	listener, err := tls.Listen("tcp", ":1953", cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return server.Serve(listener)
 }
 
 func (s *Server) ServeRTMP(conn net.Conn) {
