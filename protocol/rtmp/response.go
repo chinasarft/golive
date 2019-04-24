@@ -2,11 +2,16 @@ package rtmp
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/chinasarft/golive/utils/amf"
 )
+
+// facebook: create stream return return 3 _result
+// only last _result has streamId
+var error_Undefined = errors.New("Undefined")
 
 /*
 connect response:
@@ -156,6 +161,10 @@ func handleCreateStreamResponse(m *CommandMessage, expectTransId uint32) (functi
 
 	fFunctionalStreamId, ok := v.(float64)
 	if !ok {
+		if _, isUndefined := v.(amf.Undefined); isUndefined {
+			err = error_Undefined
+			return
+		}
 		err = fmt.Errorf("createstream wrong functionalStreamId")
 		return
 	}
@@ -206,7 +215,11 @@ func handlePublishResponse(m *CommandMessage) error {
 	code, ok := objmap["code"]
 	if ok {
 		if code.(string) != "NetStream.Publish.Start" {
-			return fmt.Errorf("publish fail:%s", code.(string))
+			codeErr := fmt.Errorf("publish fail:%s", code.(string))
+			if descErr, ok := objmap["description"]; ok {
+				return fmt.Errorf("publish fail:%s", descErr.(string))
+			}
+			return codeErr
 		}
 	} else {
 		return fmt.Errorf("publish fail no code return")

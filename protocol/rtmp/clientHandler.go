@@ -73,7 +73,6 @@ func (h *RtmpClientHandler) Start(ctx context.Context) {
 			h.connectResult <- false
 		}
 		if err != nil {
-			log.Println(err)
 			if h.role == ROLE_PLAY {
 				h.player.OnError(err)
 			}
@@ -267,6 +266,11 @@ func (h *RtmpClientHandler) handleCommandMessage(m *CommandMessage) (err error) 
 			log.Println("rtmp_state_crtstm_send")
 			h.functionalStreamId, err = handleCreateStreamResponse(m, 0)
 			if err != nil {
+				if err == error_Undefined {
+					log.Println("rtmp_state_crtstm_send undefined")
+					err = nil
+					return
+				}
 				return
 			}
 			h.status = rtmp_state_crtstrm_success

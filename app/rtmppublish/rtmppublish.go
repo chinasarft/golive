@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"math/rand"
+
+	//	"math/rand"
 	"net"
 	"net/url"
 	"os"
@@ -53,12 +54,13 @@ func (connClient *ConnClient) Start(rtmpUrl string) error {
 		port = ":" + port
 	}
 	ips, err := net.LookupIP(host)
-	log.Printf("ips: %v, host: %v", ips, host)
+	log.Printf("ips: %v, host: %v, port:%s", ips, host, port)
 	if err != nil {
 		log.Println(err)
 		return err
 	}
-	remoteIP = ips[rand.Intn(len(ips))].String()
+	//remoteIP = ips[rand.Intn(len(ips))].String() //存在ipv6的情况
+	remoteIP = ips[0].String()
 	if strings.Index(remoteIP, ":") == -1 {
 		remoteIP += port
 	}
