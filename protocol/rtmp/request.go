@@ -16,8 +16,8 @@ type RtmpUrl struct {
 }
 
 func parseRtmpUrl(addr string) (*RtmpUrl, error) {
-	if strings.Index(addr, "rtmp://") != 0 {
-		return nil, fmt.Errorf("not corrent rtmp url")
+	if strings.Index(addr, "rtmp") != 0 {
+		return nil, fmt.Errorf("not correct rtmp url")
 	}
 
 	parts := strings.Split(addr, "/")

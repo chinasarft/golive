@@ -205,9 +205,11 @@ func handlePublishResponse(m *CommandMessage) error {
 	}
 	code, ok := objmap["code"]
 	if ok {
-		if code.(string) != "codeNetStream.Publish.Start" {
+		if code.(string) != "NetStream.Publish.Start" {
 			return fmt.Errorf("publish fail:%s", code.(string))
 		}
+	} else {
+		return fmt.Errorf("publish fail no code return")
 	}
 
 	return nil

@@ -26,5 +26,6 @@ const (
 	rtmp_state_play_publish_notify = 46
 	rtmp_state_play_fail           = 1049
 
+	rtmp_state_send_fail = 2000
 	rtmp_state_stop
 )

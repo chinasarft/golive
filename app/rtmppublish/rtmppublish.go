@@ -2,14 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
 	"net/url"
+	"os"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/chinasarft/golive/protocol/rtmp"
 )
@@ -20,6 +22,8 @@ type ConnClient struct {
 	rtmpHandler *rtmp.RtmpClientHandler
 	ctx         context.Context
 	cancel      context.CancelFunc
+	useTls      bool
+	group       sync.WaitGroup
 }
 
 func (connClient *ConnClient) Start(rtmpUrl string) error {
@@ -34,6 +38,8 @@ func (connClient *ConnClient) Start(rtmpUrl string) error {
 	if len(ps) != 2 {
 		return fmt.Errorf("u path err: %s", path)
 	}
+
+	connClient.useTls = (strings.Index(rtmpUrl, "rtmps://") == 0)
 
 	port := ":1935"
 	host := u.Host
@@ -68,21 +74,38 @@ func (connClient *ConnClient) Start(rtmpUrl string) error {
 		log.Println(err)
 		return err
 	}
-	conn, err := net.DialTCP("tcp", local, remote)
+
+	var conn *net.TCPConn
+	var tlsConn *tls.Conn
+	if connClient.useTls {
+		tlsConn, err = tls.Dial("tcp", u.Host, nil)
+	} else {
+		conn, err = net.DialTCP("tcp", local, remote)
+	}
 	if err != nil {
 		log.Println(err)
 		return err
 	}
 
-	log.Println("connection:", "local:", conn.LocalAddr(), "remote:", conn.RemoteAddr())
-
-	connClient.conn = conn
-	rtmpHandler, err := rtmp.NewRtmpClientHandler(conn, rtmpUrl, rtmp.ROLE_PUBLISH, nil)
-	if err != nil {
-		conn.Close()
-		return err
+	var rtmpHandler *rtmp.RtmpClientHandler
+	if connClient.useTls {
+		connClient.conn = tlsConn
+		rtmpHandler, err = rtmp.NewRtmpClientHandler(tlsConn, rtmpUrl, rtmp.ROLE_PUBLISH, nil)
+		connClient.rtmpHandler = rtmpHandler
+		if err != nil {
+			tlsConn.Close()
+			return err
+		}
+	} else {
+		connClient.conn = conn
+		log.Println("connection:", "local:", conn.LocalAddr(), "remote:", conn.RemoteAddr())
+		rtmpHandler, err = rtmp.NewRtmpClientHandler(conn, rtmpUrl, rtmp.ROLE_PUBLISH, nil)
+		connClient.rtmpHandler = rtmpHandler
+		if err != nil {
+			conn.Close()
+			return err
+		}
 	}
-	connClient.rtmpHandler = rtmpHandler
 
 	connClient.ctx, connClient.cancel = context.WithCancel(context.Background())
 	go connClient.rtmpHandler.Start(connClient.ctx)
@@ -109,53 +132,41 @@ func (connClient *ConnClient) OnDataMessage(m *rtmp.DataMessage) {
 	return
 }
 
-func (connClient *ConnClient) readAndSend(ctx context.Context) {
+func (connClient *ConnClient) readAndSend(ctx context.Context) error {
 	var err error
-
-	defer func() {
-		if err != nil {
-			log.Println(err)
-			connClient.cancel()
-			return
-		}
-	}()
-
-	var pVideoData []byte
-	var videoBuf []byte
-	if audioBuf, err = ioutil.ReadFile("a.aac"); err != nil {
-		return
+	var flvBuf []byte
+	if flvBuf, err = ioutil.ReadFile("a.flv"); err != nil {
+		return err
 	}
 
-	if pVideoData, err = ioutil.ReadFile("a.h264"); err != nil {
-		return
-	}
+	go connClient.readAudioTag(flvBuf, ctx)
+	go connClient.readVideoTag(flvBuf, ctx)
 
-	ctx, _ = context.WithCancel(ctx)
-	bAudioOk := true
-	bVideoOk := true
-
-	nSysTimeBase := time.Now().UnixNano() / 1e6
-	nNextAudioTime := nSysTimeBase
-	nNextVideoTime := nSysTimeBase
-	nNow := nSysTimeBase
-
-	for {
-		select {
-		case <-ctx.Done():
-		default:
-		}
-	}
-
-	return
+	return nil
 }
 
 func main() {
 	log.SetFlags(log.Ldate | log.Lmicroseconds | log.Lshortfile)
-	player := &ConnClient{}
-	log.Println(player.Start("rtmp://127.0.0.1/live/t1"))
-
-	go readAndSend(player.ctx)
-	select {
-	case <-player.ctx.Done():
+	pub := &ConnClient{
+		ctx: context.Background(),
 	}
+	if len(os.Args) > 1 {
+		log.Println(pub.Start(os.Args[1]))
+	} else {
+		log.Println(pub.Start("rtmp://127.0.0.1:8008/live/t1"))
+	}
+
+	connectOk := <-pub.rtmpHandler.ConnectResult()
+	if !connectOk {
+		log.Println("rtmp connect fail")
+		return
+	}
+	pub.group.Add(2)
+	log.Println("rtmp connect success")
+	if err := pub.readAndSend(pub.ctx); err != nil {
+		log.Println(err)
+		return
+	}
+
+	pub.group.Wait()
 }

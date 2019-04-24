@@ -28,6 +28,7 @@ type RtmpClientHandler struct {
 	chunkPacker        *ChunkPacker
 	rw                 io.ReadWriter
 	txMsgChan          chan *Message
+	connectResult      chan bool
 	ctx                context.Context
 	rtmpUrl            *RtmpUrl
 	status             int
@@ -54,6 +55,7 @@ func NewRtmpClientHandler(rw io.ReadWriter, url, role string, player Play) (*Rtm
 		chunkPacker:   NewChunkPacker(),
 		rw:            rw,
 		txMsgChan:     make(chan *Message),
+		connectResult: make(chan bool),
 		status:        rtmp_state_init,
 		transactionId: 1,
 		player:        player,
@@ -67,9 +69,14 @@ func NewRtmpClientHandler(rw io.ReadWriter, url, role string, player Play) (*Rtm
 func (h *RtmpClientHandler) Start(ctx context.Context) {
 	var err error
 	defer func() {
+		if h.status != rtmp_state_publish_success {
+			h.connectResult <- false
+		}
 		if err != nil {
 			log.Println(err)
-			h.player.OnError(err)
+			if h.role == ROLE_PLAY {
+				h.player.OnError(err)
+			}
 		}
 	}()
 	err = HandshakeClient(h.rw)
@@ -87,15 +94,11 @@ func (h *RtmpClientHandler) Start(ctx context.Context) {
 
 	h.ctx, _ = context.WithCancel(ctx)
 
+CONNOK:
 	for {
 		select {
 		case <-h.ctx.Done():
 			return
-		case txmsg := <-h.txMsgChan:
-			if err = h.sendMessage(txmsg); err != nil {
-				log.Println(err)
-				return
-			}
 		default:
 			var rxmsg *Message
 			rxmsg, err = h.chunkUnpacker.getRtmpMessage(h.rw)
@@ -107,8 +110,38 @@ func (h *RtmpClientHandler) Start(ctx context.Context) {
 				log.Println(err)
 				return
 			}
+			//log.Println("ststus:", h.status)
+			if h.status == rtmp_state_publish_success {
+				h.connectResult <- true
+				break CONNOK
+			}
 		}
 	}
+
+	for {
+		select {
+		case <-h.ctx.Done():
+			return
+		case txmsg := <-h.txMsgChan:
+			if err = h.sendMessage(txmsg); err != nil {
+				h.status = rtmp_state_send_fail
+				log.Println(err)
+			CLEAR:
+				for {
+					select {
+					case <-h.txMsgChan:
+					default:
+						break CLEAR
+					}
+				}
+				return
+			}
+		}
+	}
+}
+
+func (h *RtmpClientHandler) ConnectResult() <-chan bool {
+	return h.connectResult
 }
 
 func (h *RtmpClientHandler) handleReceiveMessage(msg *Message) (err error) {
@@ -229,9 +262,9 @@ func (h *RtmpClientHandler) handleCommandMessage(m *CommandMessage) (err error) 
 			}
 			h.transactionId++
 			h.status = rtmp_state_crtstm_send
-			log.Println("rtmp_state_crtstm_send")
 
 		case rtmp_state_crtstm_send:
+			log.Println("rtmp_state_crtstm_send")
 			h.functionalStreamId, err = handleCreateStreamResponse(m, 0)
 			if err != nil {
 				return
@@ -287,12 +320,14 @@ func (h *RtmpClientHandler) handleCommandMessage(m *CommandMessage) (err error) 
 			if err != nil {
 				return
 			}
+			log.Println("status:", status)
 			if status != 0 {
 				h.status = status // should rtmp_state_play_success/start
 			}
 		case rtmp_state_play_start:
 			log.Println("<<<<<<<<<<<<receive msg after publish success>>>>>>>>>>>>>")
 		case rtmp_state_publish_send:
+			log.Println("rtmp_state_publish_send")
 			if h.role != ROLE_PUBLISH {
 				err = fmt.Errorf("state publish_send role not math:%s", h.role)
 				return
@@ -303,6 +338,7 @@ func (h *RtmpClientHandler) handleCommandMessage(m *CommandMessage) (err error) 
 			}
 			h.status = rtmp_state_publish_success
 		case rtmp_state_publish_success:
+			log.Println("rtmp_state_publish_success")
 			if h.role != ROLE_PUBLISH {
 				err = fmt.Errorf("state publish_success role not math:%s", h.role)
 				return
@@ -427,8 +463,8 @@ func (h *RtmpClientHandler) handlePlayResponseStart(m *CommandMessage) (error, i
 }
 
 func (h *RtmpClientHandler) sendMessage(m *Message) error {
-	if h.status != rtmp_state_play_start {
-		return fmt.Errorf("not in play start state")
+	if h.status != rtmp_state_publish_success {
+		return fmt.Errorf("not in publish start state")
 	}
 	switch m.MessageType {
 	case TYPE_AUDIO, TYPE_VIDEO, TYPE_DATA_AMF0, TYPE_DATA_AMF3:
@@ -459,7 +495,10 @@ func (h *RtmpClientHandler) WriteMessage(m *Message) error {
 	return err
 }
 
-func (h *RtmpClientHandler) SendAudio(data []byte, timestamp uint32) error {
+func (h *RtmpClientHandler) SendAudioMessage(data []byte, timestamp uint32) error {
+	if h.status != rtmp_state_publish_success {
+		return fmt.Errorf("not in publish start state")
+	}
 	message := &Message{
 		MessageType: TYPE_AUDIO,
 		Timestamp:   timestamp,
@@ -471,13 +510,17 @@ func (h *RtmpClientHandler) SendAudio(data []byte, timestamp uint32) error {
 	return nil
 }
 
-func (h *RtmpClientHandler) SendVideo(data []byte, timestamp uint32) error {
+func (h *RtmpClientHandler) SendVideoMessage(data []byte, timestamp uint32) error {
+	if h.status != rtmp_state_publish_success {
+		return fmt.Errorf("not in publish start state")
+	}
 	message := &Message{
 		MessageType: TYPE_VIDEO,
 		Timestamp:   timestamp,
 		StreamID:    0,
 		Payload:     data,
 	}
+	// TODO 分析封装flv tag body(only body) known as rtmp message
 
 	h.txMsgChan <- message
 	return nil
