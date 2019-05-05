@@ -190,8 +190,9 @@ func (h *RtmpClientHandler) handleUserControlMessage(m *UserControlMessage) erro
 	eventType := int(m.Payload[0])*256 + int(m.Payload[1])
 	switch eventType {
 	case 0: // StreamBegin
-		if h.status != rtmp_state_stream_is_record {
-			return fmt.Errorf("not int stream_is_record state")
+		// 不会发送is_record(nginx rtmp插件)
+		if h.status != rtmp_state_stream_is_record && h.status != rtmp_state_play_send {
+			return fmt.Errorf("in wrong state:%d", h.status)
 		}
 		log.Println("OnUserControlMessage:StreamBegin")
 		h.status = rtmp_state_stream_begin
@@ -310,9 +311,10 @@ func (h *RtmpClientHandler) handleCommandMessage(m *CommandMessage) (err error) 
 			}
 			err = h.handlePlayResponseReset(m)
 			if err != nil {
-				return
+				log.Println(err)
 			}
 			h.status = rtmp_state_play_reset
+			fallthrough //nginx rtmp也没有reset操作
 
 		case rtmp_state_play_reset:
 			if h.role != ROLE_PLAY {
@@ -408,7 +410,7 @@ func (h *RtmpClientHandler) handlePlayResponseReset(m *CommandMessage) error {
 	code, ok := objmap["code"]
 	if ok {
 		if code.(string) != "NetStream.Play.Reset" {
-			return fmt.Errorf("play fail:%s", v.(string))
+			return fmt.Errorf("play fail:%s", code.(string))
 		}
 	}
 

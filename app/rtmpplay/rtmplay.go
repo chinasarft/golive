@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/chinasarft/golive/protocol/rtmp"
@@ -18,6 +19,7 @@ type ConnClient struct {
 	rtmpHandler *rtmp.RtmpClientHandler
 	ctx         context.Context
 	cancel      context.CancelFunc
+	count       int
 }
 
 func (connClient *ConnClient) Start(rtmpUrl string) error {
@@ -95,12 +97,17 @@ func (connClient *ConnClient) OnError(err error) {
 }
 
 func (connClient *ConnClient) OnAudioMessage(m *rtmp.AudioMessage) {
-	log.Println("receive audio message:", m.Timestamp)
+	//log.Println("receive audio message:", m.Timestamp)
 	return
 }
 
 func (connClient *ConnClient) OnVideoMessage(m *rtmp.VideoMessage) {
-	log.Println("receive video message:", m.Timestamp)
+	connClient.count++
+	//if (m.Payload[0]&0xF0) == 1 && m.Payload[1] == 1 {
+	if m.Payload[0] == 23 {
+		log.Println("receive video message:", m.Timestamp, connClient.count)
+	}
+	//log.Println("--receive video message:", m.Timestamp, connClient.count, m.Payload[0:2])
 	return
 }
 
@@ -112,7 +119,11 @@ func (connClient *ConnClient) OnDataMessage(m *rtmp.DataMessage) {
 func main() {
 	log.SetFlags(log.Ldate | log.Lmicroseconds | log.Lshortfile)
 	player := &ConnClient{}
-	log.Println(player.Start("rtmp://127.0.0.1/live/t1"))
+	if len(os.Args) > 1 {
+		log.Println(player.Start(os.Args[1]))
+	} else {
+		log.Println(player.Start("rtmp://127.0.0.1/live/t1"))
+	}
 	select {
 	case <-player.ctx.Done():
 	}
