@@ -78,10 +78,14 @@ func (h *RtmpHandler) Start() error {
 	h.status = rtmp_state_hand_success
 
 	h.ctx, h.cancel = context.WithCancel(context.Background())
+
+	defer func() {
+		h.stop()
+	}()
+
 	for {
 		msg, err := h.chunkUnpacker.getRtmpMessage(h.rw)
 		if err != nil {
-			h.stop()
 			return err
 		}
 		switch msg.MessageType {
@@ -103,7 +107,6 @@ func (h *RtmpHandler) Start() error {
 			err = h.handleAggregateMessage((*AggregateMessage)(msg))
 		}
 		if err != nil {
-			h.stop()
 			return err
 		}
 

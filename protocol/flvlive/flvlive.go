@@ -56,6 +56,9 @@ func (f *FlvLiveHandler) Start() error {
 	//}
 
 	f.ctx, f.cancel = context.WithCancel(context.Background())
+	defer func() {
+		f.cancel()
+	}()
 	for {
 		d, err := GetNextExData(f.rw)
 		if err != nil {
