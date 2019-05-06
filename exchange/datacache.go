@@ -1,139 +1,144 @@
 package exchange
 
 import (
-	"fmt"
-	"sync"
+	"bytes"
+	"errors"
 	"sync/atomic"
 )
 
+var NOITEM = errors.New("NOITEM")
+var TOOLARGE = errors.New("TOOLARGE")
+
 type Config struct {
-	BlockSizeK   int // Default 128*1024K
-	MinItemSizeK int // Default 2048K
-	MaxSizeM     int
-	Level        int // 分级, MinItemSizeK*2
+	ItemCount int // 64
+	ItemSizeK int // Default 2048K
 }
 
+const (
+	item_invalid_flag int32 = -2
+	item_not_used           = -1
+)
+
 /*
-	1. item大小2M, 4M, 8M.放入哪个buffer，根据第一帧关键帧大小和分辨率来看。720P->2M, 1080P->4M, 超过1080p放入8M.(假设分3级)
-	2. 先写缓存
-	3. 如果gop超过item大小，则多分配一个
+	协程池+内存池形式
+	将goroutines和memblock binding，设为一个Partner， 每个mempool只有一个item大小
+	以不同item大小启动 n 个 partner
+
+	1. 这样做最简单，从实现上和概念上都是最简单的
+	2. 最坏情况每个partner浪费 1～3个item来做gc，可能还有携程的浪费，因为没有内存了(需要协调好分配到哪个partner)
+	3. 方便回收，以partner组为单位回收。（暂时没有想到更好的办法）
+
+	目标是尽量减少gc的影响
 */
 
 type BlockItem struct {
-	idx      int
-	level    int
-	levelIdx int
-	Buf      []byte
+	Buf   []byte
+	flag  int32
+	next  *BlockItem
+	block *gopBlock
+	rw    *bytes.Buffer
 }
 
-type blockMem struct {
-	block []byte
-	items []*BlockItem
-	flag  []int32
+type gopBlock struct {
+	buf    []byte
+	items  []*BlockItem
+	config Config
 }
 
-type levelMem struct {
-	itemSizeK  int
-	blockSizeK int
-	blocks     []*blockMem
-}
-
-type dataCache struct {
-	config       Config
-	allocMemOnce sync.Once
-	pool         []*levelMem
-	inited       bool
-}
-
-var dCache dataCache
-
-func InitCache(conf Config) {
-
-	if dCache.inited {
-		return
+func newGopBlock(config Config) *gopBlock {
+	block := &gopBlock{
+		config: config,
+		buf:    make([]byte, config.ItemCount*config.ItemSizeK*1024),
 	}
-	dCache.config = conf
-	dCache.allocMemOnce.Do(initFrameCache)
 
-	return
-}
-
-func initFrameCache() {
-
-	for i := int(0); i < dCache.config.Level; i++ {
-		dCache.pool = append(dCache.pool, newLevelMem(i, dCache.config.BlockSizeK, dCache.config.MinItemSizeK*(int(1<<uint16(i)))))
-	}
-}
-
-func newLevelMem(level, bSizeK, iSizeK int) *levelMem {
-
-	mem := &levelMem{
-		blockSizeK: bSizeK,
-		itemSizeK:  iSizeK,
-		blocks: []*blockMem{
-			&blockMem{block: make([]byte, bSizeK*1024)},
-		},
-	}
-	levelIdx := len(mem.blocks)
-	for i := int(0); i < bSizeK/iSizeK; i++ {
+	for i := int(0); i < config.ItemCount; i++ {
 		item := &BlockItem{
-			idx:      i,
-			level:    level,
-			levelIdx: levelIdx,
-			Buf:      mem.blocks[0].block[i*iSizeK : (i+1)*iSizeK],
+			Buf:   block.buf[i*config.ItemSizeK*1024 : (i+1)*config.ItemSizeK*1024],
+			block: block,
+			flag:  item_not_used,
 		}
-		mem.blocks[levelIdx].items = append(mem.blocks[levelIdx].items, item)
+		item.rw = bytes.NewBuffer(item.Buf)
+		block.items = append(block.items, item)
 	}
 
-	return mem
+	return block
 }
 
-func AllocBlockItem(level int) (*BlockItem, error) {
+// TODO 如果失败，应该往另外一个partner丢
+func (b *gopBlock) AllocBlockItem() (*BlockItem, error) {
 
-	if level > len(dCache.pool) {
-		return nil, fmt.Errorf("wrong block level")
+	for i := 0; i < len(b.items); i++ {
+		if atomic.CompareAndSwapInt32(&b.items[i].flag, item_not_used, int32(i)) {
+			return b.items[i], nil
+		}
 	}
-	mem := dCache.pool[level]
-	i := 0
 
-	for i = 0; i < len(mem.blocks); i++ {
-		block := mem.blocks[i]
-		for j := 0; j < len(block.items); j++ {
-			if atomic.CompareAndSwapInt32(&block.flag[j], 0, 1) {
-				return block.items[j], nil
+	return nil, NOITEM
+
+}
+
+func (b *gopBlock) usedCount() int {
+	count := 0
+	for i := 0; i < len(b.items); i++ {
+		if b.items[i].flag > item_not_used {
+			count++
+		}
+	}
+	return count
+}
+
+func (b *gopBlock) ReleaseBlockItem(item *BlockItem) {
+
+	var tmpItem *BlockItem = item
+	for {
+		if tmpItem == nil {
+			return
+		}
+		if tmpItem.flag > item_not_used {
+			tmpItem.flag = item_not_used
+		}
+		tmpItem = tmpItem.next
+	}
+
+}
+
+func (item *BlockItem) Write(data []byte) (int, error) {
+
+	if len(data) > len(item.Buf) {
+		return 0, TOOLARGE
+	}
+
+	curLen := item.rw.Len()
+	curCap := item.rw.Cap()
+
+	if len(data) > (curCap - curLen) {
+
+		if item.next != nil {
+			return item.next.Write(data)
+		}
+
+		newItem, err := item.block.AllocBlockItem()
+		if err != nil {
+			newItem = &BlockItem{
+				flag: item_invalid_flag,
+				Buf:  make([]byte, item.block.config.ItemSizeK*1024),
 			}
+			item.addNext(newItem)
 		}
+		return newItem.rw.Write(data)
+	} else {
+		return item.rw.Write(data)
 	}
 
-	dCache.pool = append(dCache.pool, newLevelMem(level, dCache.config.BlockSizeK, dCache.config.MinItemSizeK*(int(1<<uint16(level)))))
-
-	block := mem.blocks[i]
-	for j := 0; j < len(block.items); j++ {
-		if atomic.CompareAndSwapInt32(&block.flag[j], 0, 1) {
-			return block.items[j], nil
-		}
-	}
-	return nil, fmt.Errorf("no more BlockItem")
 }
 
-func ReleaseBlockItem(item *BlockItem) error {
-
-	if item.level > len(dCache.pool) {
-		return fmt.Errorf("wrong block level")
-	}
-	mem := dCache.pool[item.level]
-
-	if item.levelIdx > len(mem.blocks) {
-		return fmt.Errorf("wrong block levelIdx")
-	}
-
-	block := mem.blocks[item.levelIdx]
-	for j := 0; j < len(block.items); j++ {
-		if block.items[j] == item {
-			block.flag[j] = 0
-			return nil
+func (item *BlockItem) addNext(newItem *BlockItem) {
+	var tmpItem *BlockItem = item
+	for {
+		if tmpItem.next == nil {
+			tmpItem.next = newItem
+			break
 		}
+		tmpItem = item.next
 	}
-
-	return fmt.Errorf("invalid BlockItem")
 }
