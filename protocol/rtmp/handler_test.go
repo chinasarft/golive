@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"io"
 	"testing"
+
+	"github.com/chinasarft/golive/exchange"
 )
 
 var (
@@ -105,21 +107,22 @@ func (hs *testHandler) Write(p []byte) (n int, err error) {
 	return hs.writeBuf.Write(p)
 }
 
-func (hs *testHandler) OnSourceDetermined(h *RtmpHandler, ctx context.Context) (PutAVDMessage, error) {
-	output := func(m *Message) error {
+func (hs *testHandler) OnSourceDetermined(h exchange.StreamHandler, ctx context.Context) (exchange.PutData, error) {
+
+	output := func(m *exchange.ExData) error {
 		return nil
 	}
 	return output, nil
 }
 
-func (hs *testHandler) OnSinkDetermined(h *RtmpHandler, ctx context.Context) error {
+func (hs *testHandler) OnSinkDetermined(h exchange.StreamHandler, ctx context.Context) error {
 	return nil
 }
-func (hs *testHandler) OnDestroySource(h *RtmpHandler) {
+func (hs *testHandler) OnDestroySource(h exchange.StreamHandler) {
 	return
 }
 
-func (hs *testHandler) OnDestroySink(h *RtmpHandler) {
+func (hs *testHandler) OnDestroySink(h exchange.StreamHandler) {
 	return
 }
 
@@ -134,7 +137,7 @@ func TestRtmpReceiver(t *testing.T) {
 
 	rw := newTestHandler(msgByte)
 
-	handler := NewRtmpHandler(rw, rw)
+	handler := NewRtmpHandler(rw, rw, 03)
 
 	err = handler.Start()
 	if err != nil && err != io.EOF {

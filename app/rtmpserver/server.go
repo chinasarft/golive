@@ -97,9 +97,14 @@ func (srv *Server) Serve(l net.Listener) error {
 			return e
 		}
 		tempDelay = 0
-		c := NewConn(netconn, 4*1024)
-		log.Println("accept a rtmp connection")
-		go c.serve()
+		c, err := NewConn(netconn, 4*1024)
+		if err != nil {
+			log.Println(err)
+			c.Close()
+		} else {
+			log.Println("accept a rtmp connection")
+			go c.serve()
+		}
 	}
 
 }

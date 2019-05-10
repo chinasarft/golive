@@ -137,8 +137,8 @@ var (
 		"3d22b19d3ac04a2c36a52d5afc405c2e68ec0355e6df0cd8b57568ef5fb667fb7993278391cca674f796376e069d381a6c7a" +
 		"e7848ea119186c6ca04159d7e0a3841c292ac247501b290df9bc4dbd4962c1abc0c1e717f464f2c49adc3ba52df853b99180" +
 		"c7955acd375ee00dfb864f8dac57c0dd01cb06992cb64d098f33ddc943c288f94ff04fe4"
-
-	testc0c1c2 = "030000000009007c02f778551eceab8e1e362f07c5868a70b266d40220e5086118a22e3697d5fc2b6329c22ee7c7c9b0b5b3" +
+	//firstByte 03被预先读取了
+	testc0c1c2 = "0000000009007c02f778551eceab8e1e362f07c5868a70b266d40220e5086118a22e3697d5fc2b6329c22ee7c7c9b0b5b3" +
 		"45dfa8398fea3bc879208a1068425aa1174cb57258cfebe24da42ec4ff9da19c7b406f18c95bfdd04ee48b6f833214a47b8b" +
 		"f68eb05254e25ae9a9a8b496c5496f6e9cd7c68cb6bcc84169e67f3e372ffe186da8513862c5afdeb5a1218a860baccdd869" +
 		"b253dbab8a0efb59a48c442099875e55b74fd07a1b69af303e099873cb77e2d9e2c4741eb1f506a7f0b2962af91f5051c890" +
@@ -328,7 +328,8 @@ func TestHandshakeServer(t *testing.T) {
 
 	hs := newTestHandshakeer(c0c1c2)
 
-	err = handshakeServer(hs)
+	var firstByte byte = 03
+	err = handshakeServer(hs, &firstByte)
 	if err != nil {
 		t.Errorf("check C1 digest fail:")
 	} else {
@@ -385,7 +386,7 @@ func TestHandshakeClient(t *testing.T) {
 
 	go wrapHandshakeClient(c1, errchan)
 
-	err := handshakeServer(c2)
+	err := handshakeServer(c2, nil)
 	if err == nil {
 		log.Println("handshake server ok")
 	} else {

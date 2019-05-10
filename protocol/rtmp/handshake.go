@@ -180,14 +180,19 @@ func (digest *digestBlock) makeS2DigestKey() (s256 []byte) {
 	return h.Sum(nil)
 }
 
-func handshakeServer(rw io.ReadWriter) (err error) {
+func handshakeServer(rw io.ReadWriter, firstByte *byte) (err error) {
 	var header [9]byte
 
 	C0 := header[:1] // C0就一个字节
 	C1TimeAndVersion := header[1:9]
 
-	// 先读9字节(C0 和 C1的前8字节)
-	if _, err = io.ReadFull(rw, header[0:9]); err != nil {
+	begin := 0
+	if firstByte != nil {
+		begin = 1
+		header[0] = *firstByte
+	}
+	// 先读9-begin字节(C0 和 C1的前8字节)
+	if _, err = io.ReadFull(rw, header[begin:9]); err != nil {
 		return
 	}
 

@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/chinasarft/golive/app/flvserver"
 	"github.com/chinasarft/golive/app/rtmpserver"
 )
 
@@ -37,13 +36,6 @@ func startRTMPS() {
 	}
 }
 
-func startFlvLive() {
-	err := flvserver.ListenAndServe("", nil)
-	if err != nil {
-		log.Println("fail to start flvlive:", err)
-	}
-}
-
 func main() {
 	//目前这个http服务只是为了观察运行时情况
 	// 打算是启动一个内部http端口做一些控制
@@ -57,6 +49,5 @@ func main() {
 	log.Println("rtmp server starting...")
 
 	go startRTMP()
-	go startRTMPS()
-	startFlvLive()
+	startRTMPS()
 }

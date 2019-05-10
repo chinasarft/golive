@@ -45,11 +45,6 @@ func NewFlvLiveHandler(rw io.ReadWriter, pad exchange.Pad) *FlvLiveHandler {
 }
 
 func (f *FlvLiveHandler) Start() error {
-	var buf [16]byte
-	if _, err := f.rw.Read(buf[0:1]); err != nil {
-		return err
-	}
-
 	// not check magic number
 	//if uint8(buf[0]) != f.config.MagicNumber {
 	//	return fmt.Errorf("unexpected flv live magic number:%d", uint8(buf[0]))
@@ -57,7 +52,7 @@ func (f *FlvLiveHandler) Start() error {
 
 	f.ctx, f.cancel = context.WithCancel(context.Background())
 	defer func() {
-		f.cancel()
+		f.Cancel()
 	}()
 	for {
 		d, err := GetNextExData(f.rw)
@@ -137,5 +132,6 @@ func (f *FlvLiveHandler) WriteData(m *exchange.ExData) error {
 }
 
 func (f *FlvLiveHandler) Cancel() {
+	f.pad.OnDestroySource(f) // TODO flvlive暂时只用于推流，后续节点间用flvlive推流
 	f.cancel()
 }

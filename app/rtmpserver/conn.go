@@ -2,11 +2,13 @@ package rtmpserver
 
 import (
 	"bufio"
+	"io"
 	"log"
 	"net"
 	"time"
 
 	"github.com/chinasarft/golive/exchange"
+	"github.com/chinasarft/golive/protocol/flvlive"
 	"github.com/chinasarft/golive/protocol/rtmp"
 )
 
@@ -34,7 +36,11 @@ type NetConnWrapper struct {
 
 type conn struct {
 	*NetConnWrapper
-	*rtmp.RtmpHandler
+	handler ServeStart
+}
+
+type ServeStart interface {
+	Start() error
 }
 
 func NewNetConnWrapper(c net.Conn, bufSize int) *NetConnWrapper {
@@ -67,18 +73,28 @@ func (nc *NetConnWrapper) Write(p []byte) (n int, err error) {
 	//return nc.bufRW.Write(p) //不能用bufio，会缓冲下来
 }
 
-func NewConn(netConn net.Conn, bufSize int) *conn {
+func NewConn(netConn net.Conn, bufSize int) (*conn, error) {
 	cw := NewNetConnWrapper(netConn, bufSize)
 	c := &conn{
 		NetConnWrapper: cw,
-		RtmpHandler:    rtmp.NewRtmpHandler(cw, exchange.GetExchanger()),
 	}
 
-	return c
+	var flag [1]byte
+	if _, err := io.ReadFull(netConn, flag[0:1]); err != nil {
+		return nil, err
+	}
+
+	if flag[0] == 0x66 {
+		c.handler = flvlive.NewFlvLiveHandler(cw, exchange.GetExchanger())
+	} else {
+		c.handler = rtmp.NewRtmpHandler(cw, exchange.GetExchanger(), flag[0])
+	}
+
+	return c, nil
 }
 
 func (c *conn) serve() {
-	err := c.Start()
+	err := c.handler.Start()
 	if err != nil {
 		c.NetConnWrapper.Close()
 		log.Println("start return:", err)

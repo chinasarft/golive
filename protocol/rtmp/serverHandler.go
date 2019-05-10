@@ -35,6 +35,7 @@ type RtmpHandler struct {
 	chunkUnpacker *ChunkUnpacker
 	chunkPacker   *ChunkPacker
 	rw            io.ReadWriter
+	firstByte     byte // 第一个字节，因为flvlive问题，这个字节被预先读取了
 
 	connetCmdObj  map[string]interface{}
 	publishCmdObj ConnectCmdParam
@@ -58,11 +59,12 @@ type RtmpHandler struct {
 	status int // 做一个状态机？
 }
 
-func NewRtmpHandler(rw io.ReadWriter, pad exchange.Pad) *RtmpHandler {
+func NewRtmpHandler(rw io.ReadWriter, pad exchange.Pad, firstByte byte) *RtmpHandler {
 	return &RtmpHandler{
 		chunkUnpacker: NewChunkUnpacker(),
 		chunkPacker:   NewChunkPacker(),
 		rw:            rw,
+		firstByte:     firstByte,
 		pad:           pad,
 		videoCodecID:  -1,
 		audioCodecID:  -1,
@@ -70,7 +72,7 @@ func NewRtmpHandler(rw io.ReadWriter, pad exchange.Pad) *RtmpHandler {
 }
 
 func (h *RtmpHandler) Start() error {
-	err := handshakeServer(h.rw)
+	err := handshakeServer(h.rw, &h.firstByte)
 	if err != nil {
 		log.Println("rtmp HandshakeServer err:", err)
 		return err
