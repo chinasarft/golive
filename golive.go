@@ -1,23 +1,27 @@
 package main
 
 import (
-	"log"
-	"net/http"
+	"fmt"
 	_ "net/http/pprof"
+	"os"
 	"runtime"
 	"time"
 
+	"github.com/chinasarft/golive/admin"
 	"github.com/chinasarft/golive/app/rtmpserver"
+	"github.com/chinasarft/golive/config"
+	log "github.com/chinasarft/golive/mylog"
+	sig "github.com/chinasarft/golive/signaling"
 )
 
 func printNumGoroutine() {
-	ticker := time.NewTicker(time.Second * 5)
+	ticker := time.NewTicker(time.Second * 8)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			log.Println("Goroutine num: ", runtime.NumGoroutine())
+			log.Debug().Int("NumGoroutine", runtime.NumGoroutine()).Msg("")
 		}
 	}
 }
@@ -25,29 +29,44 @@ func printNumGoroutine() {
 func startRTMP() {
 	err := rtmpserver.ListenAndServe("", nil)
 	if err != nil {
-		log.Println("fail to start rtmp:", err)
+		log.Error().Str("error", err.Error()).Msg("fail to start rtmp")
 	}
 }
 
 func startRTMPS() {
 	err := rtmpserver.ListenAndServeTls("", nil)
 	if err != nil {
-		log.Println("fail to start rtmp:", err)
+		log.Error().Str("error", err.Error()).Msg("fail to start rtmps")
 	}
 }
 
 func main() {
-	//目前这个http服务只是为了观察运行时情况
-	// 打算是启动一个内部http端口做一些控制
-	go func() {
-		log.Println(http.ListenAndServe("localhost:8808", nil))
-	}()
 
-	go printNumGoroutine()
+	if len(os.Args) != 2 {
+		fmt.Printf("usage as:%s file.conf\n", os.Args[0])
+		os.Exit(1)
+	}
 
-	log.SetFlags(log.Ldate | log.Lmicroseconds | log.Lshortfile)
-	log.Println("rtmp server starting...")
+	conf, err := config.LoadConfig(os.Args[1])
+	if err != nil {
+		fmt.Printf("fail to load config file:%s(%s)\n", os.Args[1], err.Error())
+		os.Exit(2)
+	}
 
-	go startRTMP()
-	startRTMPS()
+	if err = log.UpdateConfig(&conf.Log); err != nil {
+		fmt.Println("fail to set log config:", conf.Log)
+		os.Exit(3)
+	}
+
+	admin.StartAdmin(&conf.Api)
+	sig.StartProtooSignaling(&conf.Signaling)
+
+	if conf.Log.Level == "debug" {
+		go printNumGoroutine()
+	}
+
+	log.Info().Msg("rtmp server starting...")
+
+	go startRTMPS()
+	startRTMP()
 }

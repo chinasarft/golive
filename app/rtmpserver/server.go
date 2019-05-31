@@ -3,10 +3,12 @@ package rtmpserver
 import (
 	"crypto/tls"
 	"errors"
-	"log"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/chinasarft/golive/config"
+	log "github.com/chinasarft/golive/mylog"
 )
 
 var ErrServerClosed = errors.New("rtmp: Server closed")
@@ -28,11 +30,17 @@ type Server struct {
 	activeConn   map[*conn]struct{}
 	doneChan     chan struct{}
 	onShutdown   []func()
+	pubConfig    config.PublishConfig
 }
 
+var defaultServer Server
+
 func ListenAndServe(addr string, handler Handler) error {
-	server := Server{Addr: addr, Handler: handler}
-	return server.ListenAndServe()
+	if addr != "" {
+		defaultServer.Addr = addr
+	}
+	defaultServer.Handler = handler
+	return defaultServer.ListenAndServe()
 }
 
 func ListenAndServeTls(addr string, handler Handler) error {
@@ -45,7 +53,7 @@ func ListenAndServeTls(addr string, handler Handler) error {
 	cfg := &tls.Config{Certificates: []tls.Certificate{cert}}
 	listener, err := tls.Listen("tcp", ":1953", cfg)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	return server.Serve(listener)
@@ -55,8 +63,15 @@ func (s *Server) ServeRTMP(conn net.Conn) {
 
 }
 
+func (s *Server) SetPublishConfig(conf *config.PublishConfig) {
+	s.pubConfig = *conf
+}
+
 func (srv *Server) ListenAndServe() error {
 	addr := srv.Addr
+	if addr == "" {
+		addr = srv.pubConfig.RtmpFlv.Addr
+	}
 	if addr == "" {
 		addr = ":1935"
 	}
@@ -90,7 +105,7 @@ func (srv *Server) Serve(l net.Listener) error {
 				if max := 1 * time.Second; tempDelay > max {
 					tempDelay = max
 				}
-				log.Printf("rtmp: Accept error: %v; retrying in %v", e, tempDelay)
+				log.Error().Err(e).Str("module", "rtmp").Dur("wait", tempDelay).Msg("accept error")
 				time.Sleep(tempDelay)
 				continue
 			}
@@ -99,10 +114,10 @@ func (srv *Server) Serve(l net.Listener) error {
 		tempDelay = 0
 		c, err := NewConn(netconn, 4*1024)
 		if err != nil {
-			log.Println(err)
+			log.Error().Err(err).Msg("")
 			c.Close()
 		} else {
-			log.Println("accept a rtmp connection")
+			log.Debug().Msg("accept a rtmp connection")
 			go c.serve()
 		}
 	}

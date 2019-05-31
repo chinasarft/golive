@@ -99,5 +99,4 @@ func (c *conn) serve() {
 		c.NetConnWrapper.Close()
 		log.Println("start return:", err)
 	}
-
 }
