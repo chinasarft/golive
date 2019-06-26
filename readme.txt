@@ -2,6 +2,7 @@ TODO:
 1. 考虑使用状态机重构, 还没有很严格的检查
 2. 完善状态检查和错误返回
 3. 调试goroutine数量, 因为方便打印了这个数量，加入了net/http/pprof(更方便)
+4. 有b帧的时间戳问题, rtmp/flv没有考虑CompositionTime
 
 4. 完善单元测试, 逐步完善
  1.) handleshake

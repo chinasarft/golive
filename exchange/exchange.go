@@ -33,7 +33,6 @@ type ExData struct {
 	AvFormat       uint8
 	OriginProtocol uint8
 
-	//flv tag内容，以这个为标准来交换，这样flv和rtmp就不用转换了
-	//这样的话DataType AvFormat之类的都可以根据Payload来得出
+	//flv tag的data部分，以这个为标准来交换，这样flv和rtmp就不用转换了
 	Payload []byte
 }

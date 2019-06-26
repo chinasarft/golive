@@ -45,6 +45,8 @@ type Source struct {
 	sinks   map[string]*Sink
 	err     error
 
+	gopCache circularVarQueue
+
 	VideoDecoderConfigurationRecord []byte // avc hevc
 	AACSequenceHeader               []byte
 	avMetaData                      []byte // 或者至少是在推流h265的时候是不支持的
@@ -153,11 +155,11 @@ func (p *ConnPool) handleRegisterSource(msg *PadMessage) {
 		p.receivers[key] = src
 		src.result <- nil
 		go src.work(msg.ctx)
-		p.notify(src)
+		p.notifyWaitSenders(src)
 	}
 }
 
-func (p *ConnPool) notify(src *Source) {
+func (p *ConnPool) notifyWaitSenders(src *Source) {
 	key := src.GetAppStreamKey()
 	if waitingSource, srcExits := p.waitingSenders[key]; srcExits {
 		for _, regSingMsg := range waitingSource {
@@ -198,15 +200,21 @@ func (s *Source) work(ctx context.Context) {
 
 func (src *Source) handleRtmpMessage(m *ExData) {
 	//fmt.Printf("==========>handle msg:%d %d\n", m.Payload[1], m.DataType)
+	// DataTypeAudioConfig DataTypeVideoConfig不return原因
+	//    1. 如果没有waitsenders这个时候也没有sink
+	//    2. 如果有waitsenders 这个时候source还没有收到啊sequenceconfig，会造成waitsenders收不到equenceconfig
+	//    应该有可能会发送两次equenceconfig，还没有具体分析
 	switch m.DataType {
 	case DataTypeAudioConfig:
 		src.AACSequenceHeader = m.Payload
 	case DataTypeVideoConfig:
 		src.VideoDecoderConfigurationRecord = m.Payload
-	case 15:
+	case DataTypeDataAMF0:
 		fallthrough
-	case 18:
+	case DataTypeDataAMF3:
 		src.handleDataMessaage(m)
+	case DataTypeAudio, DataTypeVideo, DataTypeVideoNonKeyFrame, DataTypeVideoKeyFrame:
+		src.gopCache.PushExData(m)
 	}
 	src.writeData(m)
 }
@@ -418,6 +426,16 @@ func (src *Source) connectSink(msg *PadMessage) {
 		sink.msgChan <- avMetaData
 	}
 
+	if src.VideoDecoderConfigurationRecord != nil {
+		vmsg := &ExData{
+			DataType:  DataTypeVideo,
+			Timestamp: 0,
+			Payload:   src.VideoDecoderConfigurationRecord,
+		}
+		sink.msgChan <- vmsg
+		log.Println("=======>write video metadata", len(vmsg.Payload), len(src.gopCache.q))
+	}
+
 	if src.AACSequenceHeader != nil {
 		amsg := &ExData{
 			DataType:  DataTypeAudio,
@@ -427,17 +445,16 @@ func (src *Source) connectSink(msg *PadMessage) {
 		sink.msgChan <- amsg
 		log.Println("=======>write audio metadata", len(amsg.Payload))
 	}
-
-	if src.VideoDecoderConfigurationRecord != nil {
-		vmsg := &ExData{
-			DataType:  DataTypeVideo,
-			Timestamp: 0,
-			Payload:   src.VideoDecoderConfigurationRecord,
+	/*
+		if src.VideoDecoderConfigurationRecord != nil {
+			// TODO 只需要在这里发送gopcache就行了
+			// 如果是waitsenders
+			for i := 0; i < len(src.gopCache.q); i++ {
+				log.Println("send gopcache:", i)
+				sink.msgChan <- src.gopCache.q[i]
+			}
 		}
-		sink.msgChan <- vmsg
-		log.Println("=======>write video metadata", len(vmsg.Payload))
-	}
-
+	*/
 }
 
 func (src *Source) deleteSink(msg *PadMessage) {
